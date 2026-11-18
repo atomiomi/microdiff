@@ -33,6 +33,15 @@ extension UITests {
                 return seed
             }
 
+            /// A clean submodule of a new remote at `path`, on `main` (registered and committed in the outer repository).
+            func submodule(_ path: String) {
+                let remote = TestRemote()
+                seeds.append(remote.clone())
+                remotes.append(remote)
+                outer.git("submodule", "--quiet", "add", remote.path, path)
+                outer.commitAll("add \(path)")
+            }
+
             /// The remote of the clone at `index` gets a commit, and the clone fetches it.
             func behind(_ index: Int, _ path: String) {
                 seeds[index].write("later.txt", "later\n")
@@ -86,19 +95,23 @@ extension UITests {
             #expect(nested.last?.sync == RepoSync(upstream: "origin/main", pull: true, push: true))
         }
 
-        @Test func theCountAndTheNoChangesLineStayAsTheyWere() {
+        @Test func theCountStaysAndTheNoChangesLineShowsOnlyWhileNothingElseIsListed() {
             let world = World(rootChanged: false)
             world.nest("inner")
+            let quiet = scannedWorkspace(world.outer.path)
+            #expect(rows(quiet).count == 1)
+            #expect(quiet.sidebarEmptyMessage == "no changes")
+
             world.behind(0, "inner")
             let workspace = scannedWorkspace(world.outer.path)
             #expect(rows(workspace).filter { $0.kind == .repo }.count == 2)
             #expect(rows(workspace).count == 2)
-            #expect(workspace.sidebarEmptyMessage == "no changes", "shown below whatever rows are listed")
+            #expect(workspace.sidebarEmptyMessage == nil, "under a repository to pull the line would float in the empty space")
             #expect(workspace.snapshot?.totalChangeCount == 0)
             let controller = makeController(world.outer.path)
             controller.workspace.scanNow()
             #expect(controller.rootView.sidebarTabs.changeCount == 0)
-            #expect(controller.rootView.tree.emptyMessage == "no changes")
+            #expect(controller.rootView.tree.emptyMessage == nil)
         }
 
         @Test func theFilesTabIsUnchanged() {
@@ -166,6 +179,40 @@ extension UITests {
             world.outer.remove("inner")
             workspace.scanNow()
             #expect(headers(workspace).count == 1)
+        }
+
+        // MARK: Clean submodules
+
+        @Test func aCleanSubmoduleWithAMarkIsAHeaderAloneWithTheSubmoduleIcon() {
+            let world = World(rootChanged: false)
+            world.submodule("zeta")
+            world.submodule("alpha")
+            world.nest("mid-nested")
+            world.behind(0, "zeta")      // seeds are in creation order: zeta, alpha, mid-nested
+            world.ahead("mid-nested")
+            let workspace = scannedWorkspace(world.outer.path)
+            let all = rows(workspace).filter { $0.kind == .repo }
+            #expect(all.map(\.name).dropFirst() == ["mid-nested", "zeta"], "by display path; alpha has no mark")
+            #expect(all[2].isSubmodule && !all[1].isSubmodule)
+            #expect(all[2].sync == RepoSync(upstream: "origin/main", pull: true, push: false, checkedAt: nil))
+            #expect(TreeRowStyle(row: all[2], tab: .changes, isSelected: false).icon == .submodule)
+            #expect(rows(workspace).count == 3, "nothing under them")
+        }
+
+        @Test func aSubmoduleHeaderGoesWhenTheMarkGoesAndComesBackAsASectionWithChanges() {
+            let world = World(rootChanged: false)
+            world.submodule("sub")
+            world.behind(0, "sub")
+            let workspace = scannedWorkspace(world.outer.path)
+            #expect(headers(workspace).count == 2)
+            world.outer.git("pull", "--quiet", "--ff-only", in: "sub")
+            workspace.scanNow()
+            #expect(headers(workspace).count == 1)
+
+            world.outer.write("sub/x.txt", "new\n")
+            workspace.scanNow()
+            #expect(rows(workspace).map(\.kind) == [.repo, .repo, .file], "a normal section now")
+            #expect(rows(workspace)[1].isSubmodule)
         }
 
         // MARK: After a remote check

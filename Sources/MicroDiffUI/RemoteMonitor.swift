@@ -15,7 +15,7 @@ final class RemoteMonitor {
     }
 
     /// What one step of a run needs about a repository.
-    private struct Job {
+    private struct Job: Sendable {
         var key: Key
         var head: String?
     }
@@ -165,9 +165,19 @@ final class RemoteMonitor {
         repos.contains { repo in key(of: repo).flatMap { memory[$0] }?.needsAncestry(head: repo.headOID) == true }
     }
 
-    /// One run over the repositories, one after another. With `remote` the remote is asked (except for a repository
-    /// in its failure wait, unless `manual`); without, only the local question "does HEAD have that commit" is asked
-    /// where HEAD or the remote's commit changed.
+    /// How many repositories one run asks at the same time (a network round trip each).
+    static let maxCallsAtOnce = 4
+
+    /// What a call found out for a repository.
+    private struct Finished: Sendable {
+        var job: Job
+        var asksRemote: Bool
+        var check: RemoteChecker.Check
+    }
+
+    /// One run over the repositories, up to `maxCallsAtOnce` at a time. With `remote` the remote is asked (except for a
+    /// repository in its failure wait, unless `manual`); without, only the local question "does HEAD have that commit"
+    /// is asked where HEAD or the remote's commit changed. Results are recorded here, on the main thread, as they come.
     private func run(remote: Bool, manual: Bool) {
         guard isEnabled, !isRunning, !repos.isEmpty else { return }
         isRunning = true
@@ -175,24 +185,38 @@ final class RemoteMonitor {
         let checker = checker
         let token = cancel
         task = Task { [weak self] in
-            for job in jobs {
-                guard let self, !Task.isCancelled, !token.isCancelled else { return }
-                let now = clock()
-                let known = memory[job.key]
-                let asksRemote = remote && RemoteSchedule.isRepositoryDue(
-                    failedAt: known?.failedAt, failures: known?.failures ?? 0, now: now, manual: manual)
-                let asksAncestry = !asksRemote && known?.needsAncestry(head: job.head) == true
-                guard asksRemote || asksAncestry else { continue }
-                let commit = known?.commit
-                let check = await Task.detached(priority: .utility) { () -> RemoteChecker.Check in
-                    if asksRemote { return checker.check(root: job.key.root, branch: job.key.branch, head: job.head, cancel: token) }
-                    let isAncestor = job.head.flatMap { head in commit.map { checker.isAncestor($0, of: head, in: job.key.root) } }
-                    return RemoteChecker.Check(answer: commit.map { .commit($0) } ?? .notApplicable, isAncestor: isAncestor)
-                }.value
-                guard !Task.isCancelled, !token.isCancelled else { return }
-                record(check, for: job, asksRemote: asksRemote)
+            guard let self else { return }
+            await withTaskGroup(of: Finished.self) { group in
+                var pending = jobs.makeIterator()
+                var inFlight = 0
+                while true {
+                    while inFlight < Self.maxCallsAtOnce, !Task.isCancelled, !token.isCancelled, let job = pending.next() {
+                        let known = self.memory[job.key]
+                        let asksRemote = remote && RemoteSchedule.isRepositoryDue(
+                            failedAt: known?.failedAt, failures: known?.failures ?? 0, now: self.clock(), manual: manual)
+                        let asksAncestry = !asksRemote && known?.needsAncestry(head: job.head) == true
+                        guard asksRemote || asksAncestry else { continue }
+                        let commit = known?.commit
+                        group.addTask(priority: .utility) {
+                            if asksRemote {
+                                return Finished(
+                                    job: job, asksRemote: true,
+                                    check: checker.check(root: job.key.root, branch: job.key.branch, head: job.head, cancel: token))
+                            }
+                            let isAncestor = job.head.flatMap { head in commit.map { checker.isAncestor($0, of: head, in: job.key.root) } }
+                            let answer = commit.map { RemoteChecker.Answer.commit($0) } ?? .notApplicable
+                            return Finished(job: job, asksRemote: false, check: RemoteChecker.Check(answer: answer, isAncestor: isAncestor))
+                        }
+                        inFlight += 1
+                    }
+                    guard inFlight > 0, let finished = await group.next() else { break }
+                    inFlight -= 1
+                    guard !Task.isCancelled, !token.isCancelled else { continue }
+                    self.record(finished.check, for: finished.job, asksRemote: finished.asksRemote)
+                }
             }
-            self?.finishRun(remote: remote)
+            guard !Task.isCancelled, !token.isCancelled else { return }
+            self.finishRun(remote: remote)
         }
     }
 

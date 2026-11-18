@@ -15,6 +15,8 @@ struct LaunchOptions {
     var snapshotScroll: CGFloat = 0
     /// Sidebar width in a snapshot (not remembered for later runs); the same limits as dragging apply.
     var snapshotSidebarWidth: CGFloat?
+    /// `--sidebar hidden`: the snapshot has no sidebar (not remembered for later runs).
+    var snapshotSidebarHidden = false
     /// Print launch timings and memory as JSON once the first scan is on screen, then quit.
     var benchmark = false
     /// Drive the window offscreen through this many rounds of activity, then quit (`scripts/leaks.sh`).
@@ -52,7 +54,12 @@ struct LaunchOptions {
                     soakIterations = 50
                 }
             case "--scroll": snapshotScroll = CGFloat(Double(value() ?? "") ?? 0)
-            case "--sidebar": snapshotSidebarWidth = Double(value() ?? "").map { CGFloat($0) }
+            case "--sidebar":
+                if choice(["hidden"]) != nil {
+                    snapshotSidebarHidden = true
+                } else {
+                    snapshotSidebarWidth = Double(value() ?? "").map { CGFloat($0) }
+                }
             case "--size":
                 let parts = (value() ?? "").split(separator: "x", omittingEmptySubsequences: false).compactMap { Double($0) }
                 if parts.count == 2, parts[0] > 0, parts[1] > 0 { snapshotSize = CGSize(width: parts[0], height: parts[1]) }
@@ -108,7 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.options = options
         self.prescan = prescan
         self.server = server
-        self.windows = windows ?? WindowManager(checksRemotes: !options.isStandaloneMode)
+        self.windows = windows ?? WindowManager(checksRemotes: !options.isStandaloneMode, defaults: options.isStandaloneMode ? nil : .standard)
         super.init()
         guard let server else { return }
         // Requests can arrive at once; until launching is done the window manager keeps them.
@@ -132,15 +139,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if let snapshotPath = options.snapshotPath {
-            let controller = MainWindowController(path: path)
+            let controller = MainWindowController(path: path, defaults: windows.defaults)
             let data = controller.renderSnapshot(
                 size: options.snapshotSize, sidebarTab: options.sidebarTab, open: options.openFiles, mode: options.mode,
-                scroll: options.snapshotScroll, sidebarWidth: options.snapshotSidebarWidth)
+                scroll: options.snapshotScroll, sidebarWidth: options.snapshotSidebarWidth,
+                sidebarHidden: options.snapshotSidebarHidden)
             let ok = data.map { (try? $0.write(to: URL(fileURLWithPath: snapshotPath))) != nil } ?? false
             exit(ok ? 0 : 1)
         }
         if let iterations = options.soakIterations {
-            Soak.run(MainWindowController(path: path), iterations: iterations)
+            Soak.run(MainWindowController(path: path, defaults: windows.defaults), iterations: iterations)
             return
         }
 
@@ -269,6 +277,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let view = NSMenu(title: "View")
         view.addItem(item("Changes", #selector(showChanges(_:)), "1"))
         view.addItem(item("Files", #selector(showFiles(_:)), "2"))
+        view.addItem(item("Hide Sidebar", #selector(toggleSidebar(_:)), "b"))
         view.addItem(.separator())
         view.addItem(item("Diff", #selector(showDiff(_:)), "d"))
         view.addItem(item("Read", #selector(showRead(_:)), "r"))
@@ -314,6 +323,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func closeTab(_ sender: Any?) { windows.keyController?.closeTab(sender) }
     @objc func showChanges(_ sender: Any?) { windows.keyController?.showChanges(sender) }
     @objc func showFiles(_ sender: Any?) { windows.keyController?.showFiles(sender) }
+    @objc func toggleSidebar(_ sender: Any?) { windows.keyController?.toggleSidebar(sender) }
     @objc func showDiff(_ sender: Any?) { windows.keyController?.showDiff(sender) }
     @objc func showRead(_ sender: Any?) { windows.keyController?.showRead(sender) }
     @objc func showEdit(_ sender: Any?) { windows.keyController?.showEdit(sender) }
@@ -322,6 +332,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func nextTab(_ sender: Any?) { windows.keyController?.nextTab(sender) }
     @objc func previousTab(_ sender: Any?) { windows.keyController?.previousTab(sender) }
     @objc func cycleWindows(_ sender: Any?) { windows.cycleWindows() }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(toggleSidebar(_:)) {
+            item.title = windows.keyController?.sidebarHidden == true ? "Show Sidebar" : "Hide Sidebar"
+        }
+        return true
+    }
 }
 
 package enum MicroDiffApp {

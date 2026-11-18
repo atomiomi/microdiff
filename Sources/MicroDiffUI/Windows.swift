@@ -25,10 +25,13 @@ final class WindowManager {
     private(set) var isReady = false
     /// Windows check their repositories against the remotes (false for snapshots, benchmarks and tests).
     let checksRemotes: Bool
+    /// Where windows remember whether their sidebar is hidden (nil for snapshots, benchmarks and soaks: they never touch it).
+    let defaults: UserDefaults?
 
-    init(showsWindows: Bool = true, checksRemotes: Bool = false) {
+    init(showsWindows: Bool = true, checksRemotes: Bool = false, defaults: UserDefaults? = .standard) {
         self.showsWindows = showsWindows
         self.checksRemotes = checksRemotes
+        self.defaults = defaults
     }
 
     /// The window menu commands act on: the key window's, else the one that was key last, else the newest.
@@ -45,7 +48,7 @@ final class WindowManager {
     /// A new window for `path`, registered and placed, not started and not shown.
     @discardableResult
     func makeWindow(path: String) -> MainWindowController {
-        let controller = MainWindowController(path: path)
+        let controller = MainWindowController(path: path, defaults: defaults)
         if checksRemotes { controller.enableRemoteChecks() }
         place(controller)
         controllers.append(controller)
