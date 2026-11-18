@@ -31,7 +31,7 @@ struct DocumentLoaderEdgeTests {
         bytes.append(contentsOf: [0xE6, 0x97, 0x0A])
         repo.write("latin.txt", bytes)
 
-        let document = try textDocument(load(repo, "latin.txt", mode: .file))
+        let document = try textDocument(load(repo, "latin.txt", mode: .read))
         #expect(document.newText.lineCount == 3)
         #expect(document.newText.line(0) == "caf\u{FFFD}")
         #expect(document.newText.line(1) == "\u{FFFD}\u{FFFD}")
@@ -89,7 +89,7 @@ struct DocumentLoaderEdgeTests {
         repo.commitAll("main")
         #expect(!repo.tryGit("merge", "other"))
 
-        for mode in [ViewMode.diff, .file] {
+        for mode in [ViewMode.diff, .read] {
             let document = try textDocument(load(repo, "a.txt", mode: mode))
             let lines = (0..<document.newText.lineCount).map { document.newText.line($0) }
             #expect(lines.first?.hasPrefix("<<<<<<<") == true)

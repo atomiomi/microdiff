@@ -17,7 +17,7 @@ package struct InstanceRequest: Equatable, Sendable {
     package var folder: String
     /// Files to open as tabs: absolute, or relative to the repository root (like `--open`).
     package var openFiles: [String]
-    /// "diff" or "file", nil for the default.
+    /// "diff", "read" or "edit", nil for the default.
     package var mode: String?
 
     package init(folder: String, openFiles: [String] = [], mode: String? = nil) {
@@ -47,7 +47,7 @@ package struct InstanceRequest: Equatable, Sendable {
             switch tag {
             case "F" where folder == nil: folder = value
             case "O" where !value.isEmpty && files.count < InstanceChannel.maxFiles: files.append(value)
-            case "M" where mode == nil && (value == "diff" || value == "file"): mode = value
+            case "M" where mode == nil && ViewMode(name: value) != nil: mode = value
             default: return nil
             }
         }
@@ -387,14 +387,14 @@ package final class InstanceServer: @unchecked Sendable {
     fileprivate init?(path: String, lock: OwnerLock) {
         guard var address = InstanceChannel.makeAddress(path), let fd = InstanceChannel.makeSocket() else { return nil }
         unlink(path)
-        // Only this user may connect: the file is 0600 (the per-user folder is private too) and peers are checked.
-        let oldMask = umask(0o177)
         let bound = withUnsafePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
         }
-        umask(oldMask)
+        // Only this user may connect: the file is 0600 (the per-user folder is private too) and peers are checked.
+        // Set on the file before listening, not through the umask: that is process-wide and would also reach a git
+        // started at the same moment, which then makes folders it cannot write into.
         var info = stat()
-        guard bound == 0, listen(fd, 64) == 0, lstat(path, &info) == 0 else {
+        guard bound == 0, chmod(path, 0o600) == 0, listen(fd, 64) == 0, lstat(path, &info) == 0 else {
             Darwin.close(fd)
             return nil
         }

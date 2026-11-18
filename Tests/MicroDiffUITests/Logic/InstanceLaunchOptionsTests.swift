@@ -19,17 +19,18 @@ extension UITests {
 
         @Test func normalStartsUseTheRunningInstance() {
             #expect(!parse(["/repo"]).isStandaloneMode)
-            #expect(!parse(["/repo", "--open", "a.txt", "--mode", "file", "--tab", "files"]).isStandaloneMode)
+            #expect(!parse(["/repo", "--open", "a.txt", "--mode", "read", "--tab", "files"]).isStandaloneMode)
             #expect(!parse([]).isStandaloneMode)
         }
 
         @Test func theRequestCarriesTheAbsoluteFolderTheFilesAndTheMode() {
-            let request = parse(["/some/repo/../repo", "--open", "/some/repo/a b.txt", "--open", "src/x.swift", "--mode", "file"]).instanceRequest
+            let request = parse(["/some/repo/../repo", "--open", "/some/repo/a b.txt", "--open", "src/x.swift", "--mode", "read"]).instanceRequest
             #expect(request.folder == "/some/repo")
             #expect(request.openFiles == ["/some/repo/a b.txt", "src/x.swift"])
-            #expect(request.mode == "file")
+            #expect(request.mode == "read")
             #expect(parse(["/r"]).instanceRequest == InstanceRequest(folder: "/r"))
             #expect(parse(["/r", "--mode", "diff"]).instanceRequest.mode == "diff")
+            #expect(parse(["/r", "--mode", "edit"]).instanceRequest.mode == "edit")
         }
 
         @Test func aRelativeFolderIsResolvedAgainstTheWorkingDirectoryBeforeItIsSent() {

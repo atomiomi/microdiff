@@ -11,7 +11,7 @@ package enum DiffRowKind: UInt8, Sendable, Hashable {
     case fold
 }
 
-/// Gutter mark for a line in the whole-file view.
+/// Gutter mark for a line in the read view.
 package enum LineMark: UInt8, Sendable, Hashable {
     case none
     /// The line is new (its hunk removed nothing).
@@ -20,7 +20,7 @@ package enum LineMark: UInt8, Sendable, Hashable {
     case modified
 }
 
-/// One visible row of a diff or file view.
+/// One visible row of a diff or read view.
 package struct DiffRow: Sendable, Hashable {
     package var kind: DiffRowKind
     /// - context / added: 0-based line index in the NEW text.

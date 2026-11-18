@@ -25,7 +25,7 @@ extension UITests {
         }
 
         @Test func modifiedFileInFileModeOpensAsTheWholeFileWithMarks() throws {
-            let document = try #require(opened("src/app.swift", mode: .file).content?.document)
+            let document = try #require(opened("src/app.swift", mode: .read).content?.document)
             #expect(document.kind == .file)
             #expect(document.rows.rowCount == 40)
             #expect(document.rows.foldCount == 0)
@@ -64,7 +64,7 @@ extension UITests {
         }
 
         @Test func unchangedFileOpensAsPlainText() throws {
-            let document = try #require(opened("README.md", mode: .file).content?.document)
+            let document = try #require(opened("README.md", mode: .read).content?.document)
             #expect(document.kind == .plain)
             #expect(document.firstLine == "# fixture")
         }
@@ -83,7 +83,7 @@ extension UITests {
         @Test func fileOutsideTheWorkspaceOpensWithoutChanges() throws {
             let other = Fixture.plainFolder()
             let workspace = scannedWorkspace(Self.repo.path)
-            workspace.openFile(other.path + "/top.txt", mode: .file, pin: true, synchronously: true)
+            workspace.openFile(other.path + "/top.txt", mode: .read, pin: true, synchronously: true)
             #expect(workspace.tabs[0].change == nil)
             #expect(workspace.content?.document?.firstLine == "top")
             workspace.selectSidebarTab(.files)
@@ -96,7 +96,7 @@ extension UITests {
             workspace.onContentChanged = { keeps.append($0) }
             workspace.open(Self.repo, "src/other.swift")
             #expect(keeps == [false])
-            workspace.setMode(.file)
+            workspace.setMode(.read)
             _ = await waitUntil { keeps.count == 2 }
             #expect(keeps == [false, false])
         }
@@ -223,7 +223,7 @@ extension UITests {
         @Test func rescanOfADeletedFileOnDiskTurnsItsTabIntoADeletedDocument() async {
             let repo = Fixture.cleanRepo()
             let workspace = scannedWorkspace(repo.path)
-            workspace.open(repo, "README.md", mode: .file)
+            workspace.open(repo, "README.md", mode: .read)
 
             repo.remove("README.md")
             workspace.scanNow()

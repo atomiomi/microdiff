@@ -79,9 +79,11 @@ struct FileTab: Equatable {
     var kind: ChangeKind?
     /// A preview tab is replaced by the next file opened with a single click.
     var isPreview: Bool
+    /// Unsaved edits: a dot sits where the close box is (until the pointer is over the tab).
+    var isUnsaved = false
 }
 
-/// The row of open files above the code, with the `diff / file` switch pinned at the right.
+/// The row of open files above the code, with the `diff / read / edit` switch pinned at the right.
 final class FileTabBarView: NSView {
     var onSelect: ((Int) -> Void)?
     /// Double click: keep the tab (stop it being a preview).
@@ -92,6 +94,8 @@ final class FileTabBarView: NSView {
     private(set) var tabs: [FileTab] = []
     private(set) var activeIndex: Int?
     private(set) var mode: ViewMode = .diff
+    /// False when the open file cannot be edited: `edit` is drawn dimmed and does not react.
+    private(set) var canEdit = true
 
     private var scrollX: CGFloat = 0
     /// Bring the active tab into view on the next layout (after it changed), but not while the user scrolls.
@@ -109,15 +113,24 @@ final class FileTabBarView: NSView {
     private static let closeIcon: CGFloat = 10
     private static let rightPadding: CGFloat = 8
     private static let controlPadding: CGFloat = 16
+    private static let dotSize: CGFloat = 8
 
     override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    func update(tabs: [FileTab], activeIndex: Int?, mode: ViewMode) {
+    func update(tabs: [FileTab], activeIndex: Int?, mode: ViewMode, canEdit: Bool = true) {
         if tabs != self.tabs || activeIndex != self.activeIndex { revealActive = true }
         self.tabs = tabs
         self.activeIndex = activeIndex
         self.mode = mode
+        self.canEdit = canEdit
+        needsDisplay = true
+    }
+
+    /// Whether the open file can be edited is often known only once its content has arrived (a binary file).
+    func setCanEdit(_ canEdit: Bool) {
+        guard canEdit != self.canEdit else { return }
+        self.canEdit = canEdit
         needsDisplay = true
     }
 
@@ -130,7 +143,14 @@ final class FileTabBarView: NSView {
         var menuRect: CGRect?
         var dividerX: CGFloat?
         var diffRect: CGRect
-        var fileRect: CGRect
+        var readRect: CGRect
+        var editRect: CGRect
+
+        /// The switch word under a point (with a little slack around each word).
+        func mode(at point: CGPoint) -> ViewMode? {
+            let words: [(CGRect, ViewMode)] = [(diffRect, .diff), (readRect, .read), (editRect, .edit)]
+            return words.first { $0.0.insetBy(dx: -7, dy: 0).contains(point) }?.1
+        }
     }
 
     private func titleFace(_ index: Int) -> Face {
@@ -159,9 +179,10 @@ final class FileTabBarView: NSView {
 
     private func geometry() -> Geometry {
         let diffWidth = TextCache.shared.line("diff", .regular, .fg).width
-        let fileWidth = TextCache.shared.line("file", .regular, .fg).width
+        let readWidth = TextCache.shared.line("read", .regular, .fg).width
+        let editWidth = TextCache.shared.line("edit", .regular, .fg).width
         let toggleGap = Theme.charWidth * 2
-        let toggleWidth = tabs.isEmpty ? 0 : Self.controlPadding * 2 + diffWidth + toggleGap + fileWidth
+        let toggleWidth = tabs.isEmpty ? 0 : Self.controlPadding * 2 + diffWidth + toggleGap + readWidth + toggleGap + editWidth
         let countWidth = TextCache.shared.line("\(tabs.count)", .regular, .dim).width
         let menuWidth = Self.controlPadding * 2 + countWidth + 4 + 13
 
@@ -186,8 +207,11 @@ final class FileTabBarView: NSView {
 
         let toggleX = bounds.width - toggleWidth + Self.controlPadding
         let diffRect = CGRect(x: toggleX, y: 0, width: diffWidth, height: bounds.height - 1)
-        let fileRect = CGRect(x: toggleX + diffWidth + toggleGap, y: 0, width: fileWidth, height: bounds.height - 1)
-        return Geometry(layout: result, viewport: viewport, menuRect: menuRect, dividerX: dividerX, diffRect: diffRect, fileRect: fileRect)
+        let readRect = CGRect(x: diffRect.maxX + toggleGap, y: 0, width: readWidth, height: bounds.height - 1)
+        let editRect = CGRect(x: readRect.maxX + toggleGap, y: 0, width: editWidth, height: bounds.height - 1)
+        return Geometry(
+            layout: result, viewport: viewport, menuRect: menuRect, dividerX: dividerX, diffRect: diffRect, readRect: readRect,
+            editRect: editRect)
     }
 
     /// The close box of a tab, in view coordinates: pinned to the tab's right edge, centered vertically.
@@ -253,7 +277,12 @@ final class FileTabBarView: NSView {
                 ctx.draw(letter, x: x, rowY: 0, rowHeight: textHeight, face: .small)
                 ctx.restoreGState()
             }
-            if showsClose(index) {
+            if tabs[index].isUnsaved, index != hoverTab {
+                let box = closeRect(index, geo)
+                let dot = CGRect(x: box.midX - Self.dotSize / 2, y: box.midY - Self.dotSize / 2, width: Self.dotSize, height: Self.dotSize)
+                ctx.setFillColor((isActive ? Ink.fg : Ink.dim).cg)
+                ctx.fillEllipse(in: dot)
+            } else if showsClose(index) {
                 let box = closeRect(index, geo)
                 let isHot = hoverClose && hoverTab == index
                 if isHot {
@@ -296,7 +325,9 @@ final class FileTabBarView: NSView {
             ctx.fill(CGRect(x: geo.viewport, y: 0, width: 1, height: height), Theme.line)
         }
         ctx.draw("diff", .regular, mode == .diff ? .fg : .dim, x: geo.diffRect.minX, rowY: 0, rowHeight: textHeight)
-        ctx.draw("file", .regular, mode == .file ? .fg : .dim, x: geo.fileRect.minX, rowY: 0, rowHeight: textHeight)
+        ctx.draw("read", .regular, mode == .read ? .fg : .dim, x: geo.readRect.minX, rowY: 0, rowHeight: textHeight)
+        let editInk: Ink = mode == .edit ? .fg : canEdit ? .dim : .lineNumber
+        ctx.draw("edit", .regular, editInk, x: geo.editRect.minX, rowY: 0, rowHeight: textHeight)
     }
 
     /// Tabs cut off at an edge fade into the bar color.
@@ -336,15 +367,16 @@ final class FileTabBarView: NSView {
         NSCursor.arrow.set()
     }
 
-    /// A pointing hand over everything that reacts to a click: tabs, close boxes, the tab list button and the diff / file switch.
+    /// A pointing hand over everything that reacts to a click: tabs, close boxes, the tab list button and the switch
+    /// (not over a dimmed `edit`).
     func cursor(at point: CGPoint) -> NSCursor {
         let geo = geometry()
         if point.x < geo.viewport {
             return geo.layout.index(atViewportX: Double(point.x)) == nil ? .arrow : .pointingHand
         }
         guard !tabs.isEmpty else { return .arrow }
-        let onControl = geo.menuRect?.contains(point) == true
-            || geo.diffRect.insetBy(dx: -7, dy: 0).contains(point) || geo.fileRect.insetBy(dx: -7, dy: 0).contains(point)
+        let word = geo.mode(at: point)
+        let onControl = geo.menuRect?.contains(point) == true || (word != nil && (word != .edit || canEdit))
         return onControl ? .pointingHand : .arrow
     }
 
@@ -369,10 +401,8 @@ final class FileTabBarView: NSView {
             guard !tabs.isEmpty else { return }
             if let menuRect = geo.menuRect, menuRect.contains(point) {
                 showMenu(at: CGPoint(x: menuRect.minX, y: bounds.height + 2))
-            } else if geo.diffRect.insetBy(dx: -7, dy: 0).contains(point) {
-                onMode?(.diff)
-            } else if geo.fileRect.insetBy(dx: -7, dy: 0).contains(point) {
-                onMode?(.file)
+            } else if let word = geo.mode(at: point), word != .edit || canEdit {
+                onMode?(word)
             }
             return
         }

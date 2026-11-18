@@ -5,9 +5,9 @@
 #   scripts/leaks.sh 1000       a longer soak
 #
 # The app runs offscreen (`--soak`): no window, no Dock icon, it never takes focus. It opens a throwaway demo
-# repository, starts its file watcher, and repeats a day's activity (rescans, tabs, diff/file, folds, scrolling,
-# sidebar, resizes). Meanwhile this script changes the repository under it: edits, files added and deleted in
-# bulk, branch switches. At exit `leaks` looks for memory nothing points to any more.
+# repository, starts its file watcher, and repeats a day's activity (rescans, tabs, diff/read, folds, scrolling,
+# sidebar, resizes, edit mode: type, save, leave). Meanwhile this script changes the repository under it: edits,
+# files added and deleted in bulk, branch switches. At exit `leaks` looks for memory nothing points to any more.
 #
 # Exit status: 0 no leaks, 1 leaks found (the report is printed), 2 something else went wrong.
 set -uo pipefail

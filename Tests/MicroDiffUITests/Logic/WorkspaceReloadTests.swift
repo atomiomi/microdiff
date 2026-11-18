@@ -9,7 +9,7 @@ extension UITests {
     @MainActor
     @Suite
     struct WorkspaceReloadTests {
-        private func workspace(_ repo: TestRepo, opening path: String, mode: ViewMode = .file) -> (Workspace, Counter) {
+        private func workspace(_ repo: TestRepo, opening path: String, mode: ViewMode = .read) -> (Workspace, Counter) {
             let workspace = scannedWorkspace(repo.path)
             let counter = Counter()
             workspace.onContentChanged = { keepScroll in counter.calls.append(keepScroll) }

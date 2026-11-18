@@ -23,7 +23,7 @@ extension UITests {
             try #require(controller.window.contentView as? RootView)
         }
 
-        private func open(_ controller: MainWindowController, _ paths: [String], mode: ViewMode = .file) {
+        private func open(_ controller: MainWindowController, _ paths: [String], mode: ViewMode = .read) {
             for path in paths {
                 controller.workspace.openFile(Self.repo.path + "/" + path, mode: mode, pin: true, synchronously: true)
             }
@@ -63,15 +63,15 @@ extension UITests {
             #expect(controller.workspace.activeTab == 0)
         }
 
-        @Test func toggleDiffFileSwitchesTheActiveTabsModeBothWays() throws {
+        @Test func showDiffAndShowReadSwitchTheActiveTabsMode() throws {
             let controller = controller()
-            controller.toggleDiffFile(nil)
+            controller.showDiff(nil)
             #expect(controller.workspace.tabs.isEmpty)
 
             open(controller, ["src/app.swift"], mode: .diff)
-            controller.toggleDiffFile(nil)
-            #expect(controller.workspace.tabs[0].mode == .file)
-            controller.toggleDiffFile(nil)
+            controller.showRead(nil)
+            #expect(controller.workspace.tabs[0].mode == .read)
+            controller.showDiff(nil)
             #expect(controller.workspace.tabs[0].mode == .diff)
         }
 

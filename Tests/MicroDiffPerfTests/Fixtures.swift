@@ -107,6 +107,9 @@ enum Fixtures {
         return document
     }
 
+    /// `Big.swift` as it is on disk (20 edited lines against HEAD).
+    static let docRepoText: Data = FileManager.default.contents(atPath: docRepo.path + "/Big.swift") ?? Data()
+
     static let diffDocument = document(mode: .diff)
-    static let fileDocument = document(mode: .file)
+    static let fileDocument = document(mode: .read)
 }

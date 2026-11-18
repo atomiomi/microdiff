@@ -45,8 +45,9 @@ enum Soak {
                     { workspace.refresh() },
                     { if let path = changed.first { workspace.openFile(path, mode: .diff, pin: false) } },
                     { if changed.count > 1 { workspace.openFile(changed[1], mode: .diff, pin: true) } },
-                    { if changed.count > 2 { workspace.openFile(changed[2], mode: .file, pin: false) } },
-                    { controller.toggleDiffFile(nil) },
+                    { if changed.count > 2 { workspace.openFile(changed[2], mode: .read, pin: false) } },
+                    { controller.showRead(nil) },
+                    { controller.showDiff(nil) },
                     { expandFirstFold(workspace) },
                     { scroll(controller, by: 5) },
                     { controller.nextTab(nil) },
@@ -54,6 +55,10 @@ enum Soak {
                     { toggleFirstFolder(workspace) },
                     { toggleFirstFolder(workspace) },
                     { controller.showChanges(nil) },
+                    { enterEditMode(controller, changed) },
+                    { typeAndSave(controller, insert: true) },
+                    { typeAndSave(controller, insert: false) },
+                    { controller.showDiff(nil) },
                     { controller.window.setContentSize(i % 2 == 0 ? NSSize(width: 900, height: 560) : NSSize(width: 1180, height: 720)) },
                     { if i % 5 == 4 { while !workspace.tabs.isEmpty { workspace.closeActiveTab() } } },
                 ]
@@ -89,6 +94,33 @@ enum Soak {
             workspace.expandFold(startingAt: document.rows.row(at: index).line)
             return
         }
+    }
+
+    /// Opens the first changed file that can be edited, in edit mode.
+    private static func enterEditMode(_ controller: MainWindowController, _ paths: [String]) {
+        let workspace = controller.workspace
+        for path in paths {
+            workspace.openFile(path, mode: .read, pin: true)
+            controller.showEdit(nil)
+            if workspace.activeBuffer != nil { return }
+        }
+    }
+
+    private static let typed = "soak\n"
+
+    /// Types a line at the top and saves, or takes it out again and saves (so the file does not grow round after round).
+    private static func typeAndSave(_ controller: MainWindowController, insert: Bool) {
+        guard controller.workspace.activeBuffer != nil, let textView = (controller.window.contentView as? RootView)?.editor?.textView else {
+            return
+        }
+        if insert {
+            textView.setSelectedRange(NSRange(location: 0, length: 0))
+            textView.insertText(typed, replacementRange: NSRange(location: NSNotFound, length: 0))
+        } else if textView.string.hasPrefix(typed) {
+            textView.setSelectedRange(NSRange(location: 0, length: typed.utf16.count))
+            textView.delete(nil)
+        }
+        controller.saveDocument(nil)
     }
 
     private static func toggleFirstFolder(_ workspace: Workspace) {

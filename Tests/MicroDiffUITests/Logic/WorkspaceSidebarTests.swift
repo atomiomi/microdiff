@@ -223,7 +223,7 @@ extension UITests {
             workspace.toggle(try #require(workspace.row(path: "src", kind: .directory)))
             workspace.open(try #require(workspace.row(path: "src/app.swift")), pin: true)
             let tab = try #require(workspace.tabs.first)
-            #expect(tab.mode == .file)
+            #expect(tab.mode == .read)
             #expect(tab.path == Self.changes.path + "/src/app.swift")
             #expect(tab.change?.kind == .modified)
             #expect(tab.isPreview == false)

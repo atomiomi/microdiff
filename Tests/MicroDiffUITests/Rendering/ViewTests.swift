@@ -359,8 +359,8 @@ extension UITests {
             #expect(bitmap.count(near: word, in: PixelRegion(x: 0, y: 8 + rowHeight, width: 400, height: rowHeight), tolerance: 4) > 20)
         }
 
-        @Test func fileModeMarksChangedLinesInTheGutterOnly() {
-            let document = DocumentFixture.load(Self.repo, "src/app.swift", mode: .file)
+        @Test func readModeMarksChangedLinesInTheGutterOnly() {
+            let document = DocumentFixture.load(Self.repo, "src/app.swift", mode: .read)
             #expect(document.kind == .file)
             let view = codeView(document)
             let bitmap = Render.canvas(view)
@@ -433,21 +433,21 @@ extension UITests {
         @Test func setDocumentScrollsToTheGivenOffset() {
             let view = CodeView(frame: NSRect(x: 0, y: 0, width: 700, height: 300))
             view.layoutSubtreeIfNeeded()
-            view.setDocument(DocumentFixture.load(Self.repo, "src/app.swift", mode: .file), keepScroll: false, scroll: CGPoint(x: 0, y: 120))
+            view.setDocument(DocumentFixture.load(Self.repo, "src/app.swift", mode: .read), keepScroll: false, scroll: CGPoint(x: 0, y: 120))
             #expect(view.scrollOffset == CGPoint(x: 0, y: 120))
         }
 
         @Test func keepScrollLeavesTheViewWhereItIs() {
-            let view = codeView(DocumentFixture.load(Self.repo, "src/app.swift", mode: .file))
+            let view = codeView(DocumentFixture.load(Self.repo, "src/app.swift", mode: .read))
             view.scroll(to: CGPoint(x: 0, y: 200))
-            view.setDocument(DocumentFixture.load(Self.repo, "src/app.swift", mode: .file), keepScroll: true)
+            view.setDocument(DocumentFixture.load(Self.repo, "src/app.swift", mode: .read), keepScroll: true)
             #expect(view.scrollOffset.y == 200)
-            view.setDocument(DocumentFixture.load(Self.repo, "src/app.swift", mode: .file), keepScroll: false)
+            view.setDocument(DocumentFixture.load(Self.repo, "src/app.swift", mode: .read), keepScroll: false)
             #expect(view.scrollOffset.y == 0)
         }
 
         @Test func scrollOffsetIsClampedToTheContent() {
-            let view = codeView(DocumentFixture.load(Self.repo, "src/app.swift", mode: .file))
+            let view = codeView(DocumentFixture.load(Self.repo, "src/app.swift", mode: .read))
             view.scroll(to: CGPoint(x: 0, y: 100_000))
             #expect(view.scrollOffset.y == view.contentSize.height - 300)
             view.scroll(to: CGPoint(x: 0, y: -50))
@@ -455,7 +455,7 @@ extension UITests {
         }
 
         @Test func scrollingReportsTheNewOffset() {
-            let view = codeView(DocumentFixture.load(Self.repo, "src/app.swift", mode: .file))
+            let view = codeView(DocumentFixture.load(Self.repo, "src/app.swift", mode: .read))
             var offsets: [CGPoint] = []
             view.onScroll = { offsets.append($0) }
             view.scroll(to: CGPoint(x: 0, y: 80))
@@ -463,7 +463,7 @@ extension UITests {
         }
 
         @Test func scrolledViewDrawsTheRowsThatAreInView() {
-            let view = codeView(DocumentFixture.load(Self.repo, "src/app.swift", mode: .file))
+            let view = codeView(DocumentFixture.load(Self.repo, "src/app.swift", mode: .read))
             let marked = PixelRegion(x: 0, y: 8 + 19 * rowHeight - 200, width: 2, height: rowHeight)
             view.scroll(to: CGPoint(x: 0, y: 200))
             let bitmap = Render.canvas(view)
@@ -471,7 +471,7 @@ extension UITests {
         }
 
         @Test func keyboardScrollsByLinesPagesAndToTheEnds() {
-            let view = codeView(DocumentFixture.load(Self.repo, "src/app.swift", mode: .file))
+            let view = codeView(DocumentFixture.load(Self.repo, "src/app.swift", mode: .read))
             view.keyDown(with: Event.key(125))
             #expect(view.scrollOffset.y == Theme.lineHeight)
             view.keyDown(with: Event.key(126))
@@ -625,14 +625,17 @@ struct FileTabBarViewTests {
         let diffWidth = Int(TextCache.shared.line("diff", .regular, .fg).width)
         let right = PixelRegion(x: 700, y: 4, width: 100, height: 28)
         let diffMode = Render.tabBar(bar(tabs(["a.rs"]), active: 0, mode: .diff))
-        let fileMode = Render.tabBar(bar(tabs(["a.rs"]), active: 0, mode: .file))
+        let readMode = Render.tabBar(bar(tabs(["a.rs"]), active: 0, mode: .read))
         let fg = RGB(Ink.fg.cg)
-        // "diff" is bright in diff mode, "file" is bright in file mode: the bright pixels move.
+        // "diff" is bright in diff mode, "read" is bright in read mode: the bright pixels move.
         let bright = { (b: Bitmap, x: Int) in b.count(near: fg, in: PixelRegion(x: x, y: 4, width: 40, height: 28), tolerance: 25) }
-        let fileX = 800 - 16 - diffWidth
-        let diffX = fileX - Int(Theme.charWidth * 2) - diffWidth
-        #expect(bright(diffMode, diffX) > bright(fileMode, diffX))
-        #expect(bright(fileMode, fileX) > bright(diffMode, fileX))
+        let editMode = Render.tabBar(bar(tabs(["a.rs"]), active: 0, mode: .edit))
+        let editX = 800 - 16 - diffWidth
+        let readX = editX - Int(Theme.charWidth * 2) - diffWidth
+        let diffX = readX - Int(Theme.charWidth * 2) - diffWidth
+        #expect(bright(diffMode, diffX) > bright(readMode, diffX))
+        #expect(bright(readMode, readX) > bright(diffMode, readX))
+        #expect(bright(editMode, editX) > bright(readMode, editX))
         #expect(diffMode.count(notNear: inactive, in: right) > 40)
     }
 
@@ -671,10 +674,10 @@ struct FileTabBarViewTests {
     }
 
     @Test func updateStoresWhatItWasGiven() {
-        let view = bar(tabs(["a", "b"]), active: 1, mode: .file)
+        let view = bar(tabs(["a", "b"]), active: 1, mode: .read)
         #expect(view.tabs.map(\.title) == ["a", "b"])
         #expect(view.activeIndex == 1)
-        #expect(view.mode == .file)
+        #expect(view.mode == .read)
     }
 
     // MARK: Mouse
@@ -696,12 +699,15 @@ struct FileTabBarViewTests {
         var modes: [ViewMode] = []
         view.onMode = { modes.append($0) }
         let diffWidth = TextCache.shared.line("diff", .regular, .fg).width
-        let fileWidth = TextCache.shared.line("file", .regular, .fg).width
-        let fileX = 800 - 16 - fileWidth
-        let diffX = fileX - Theme.charWidth * 2 - diffWidth
-        view.mouseDown(with: Event.mouse(at: CGPoint(x: fileX + 2, y: 18)))
+        let readWidth = TextCache.shared.line("read", .regular, .fg).width
+        let editWidth = TextCache.shared.line("edit", .regular, .fg).width
+        let editX = 800 - 16 - editWidth
+        let readX = editX - Theme.charWidth * 2 - readWidth
+        let diffX = readX - Theme.charWidth * 2 - diffWidth
+        view.mouseDown(with: Event.mouse(at: CGPoint(x: readX + 2, y: 18)))
         view.mouseDown(with: Event.mouse(at: CGPoint(x: diffX + 2, y: 18)))
-        #expect(modes == [.file, .diff])
+        view.mouseDown(with: Event.mouse(at: CGPoint(x: editX + 2, y: 18)))
+        #expect(modes == [.read, .diff, .edit])
     }
 
     @Test func clickingTheEmptyPartOfTheBarDoesNothing() {

@@ -13,6 +13,8 @@ struct LaunchOptions {
     var mode: ViewMode?
     /// Vertical scroll offset of the code view in a snapshot.
     var snapshotScroll: CGFloat = 0
+    /// Sidebar width in a snapshot (not remembered for later runs); the same limits as dragging apply.
+    var snapshotSidebarWidth: CGFloat?
     /// Print launch timings and memory as JSON once the first scan is on screen, then quit.
     var benchmark = false
     /// Drive the window offscreen through this many rounds of activity, then quit (`scripts/leaks.sh`).
@@ -39,7 +41,7 @@ struct LaunchOptions {
             case "--snapshot": snapshotPath = value()
             case "--tab": if let tab = choice(["changes", "files"]) { sidebarTab = tab == "files" ? .files : .changes }
             case "--open": if let file = value() { openFiles.append(file) }
-            case "--mode": if let name = choice(["diff", "file"]) { mode = name == "file" ? .file : .diff }
+            case "--mode": if let name = choice(ViewMode.allCases.map(\.name)) { mode = ViewMode(name: name) }
             case "--bench": benchmark = true
             case "--soak":
                 // The count is optional, so a path right after the flag stays the path.
@@ -50,6 +52,7 @@ struct LaunchOptions {
                     soakIterations = 50
                 }
             case "--scroll": snapshotScroll = CGFloat(Double(value() ?? "") ?? 0)
+            case "--sidebar": snapshotSidebarWidth = Double(value() ?? "").map { CGFloat($0) }
             case "--size":
                 let parts = (value() ?? "").split(separator: "x", omittingEmptySubsequences: false).compactMap { Double($0) }
                 if parts.count == 2, parts[0] > 0, parts[1] > 0 { snapshotSize = CGSize(width: parts[0], height: parts[1]) }
@@ -77,7 +80,7 @@ struct LaunchOptions {
     /// What this start asks a running instance for: the folder (empty from the Finder: only come to the front)
     /// and the files to open.
     var instanceRequest: InstanceRequest {
-        InstanceRequest(folder: startPath ?? "", openFiles: openFiles, mode: mode.map { $0 == .file ? "file" : "diff" })
+        InstanceRequest(folder: startPath ?? "", openFiles: openFiles, mode: mode?.name)
     }
 }
 
@@ -101,11 +104,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `kill` (or logging out) quits like Cmd+Q, so the socket file is removed.
     private var terminateSignal: DispatchSourceSignal?
 
-    init(options: LaunchOptions, prescan: BackgroundScan?, server: InstanceServer? = nil, windows: WindowManager = WindowManager()) {
+    init(options: LaunchOptions, prescan: BackgroundScan?, server: InstanceServer? = nil, windows: WindowManager? = nil) {
         self.options = options
         self.prescan = prescan
         self.server = server
-        self.windows = windows
+        self.windows = windows ?? WindowManager(checksRemotes: !options.isStandaloneMode)
         super.init()
         guard let server else { return }
         // Requests can arrive at once; until launching is done the window manager keeps them.
@@ -132,7 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let controller = MainWindowController(path: path)
             let data = controller.renderSnapshot(
                 size: options.snapshotSize, sidebarTab: options.sidebarTab, open: options.openFiles, mode: options.mode,
-                scroll: options.snapshotScroll)
+                scroll: options.snapshotScroll, sidebarWidth: options.snapshotSidebarWidth)
             let ok = data.map { (try? $0.write(to: URL(fileURLWithPath: snapshotPath))) != nil } ?? false
             exit(ok ? 0 : 1)
         }
@@ -159,6 +162,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    /// Windows with unsaved edits ask first; Cancel in any of them keeps the app running.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard windows.hasUnsavedEdits else { return .terminateNow }
+        windows.confirmQuit { ok in NSApp.reply(toApplicationShouldTerminate: ok) }
+        return .terminateLater
+    }
 
     func applicationWillTerminate(_ notification: Notification) {
         windows.saveFrame()
@@ -236,14 +246,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let file = NSMenu(title: "File")
         file.addItem(item("Open Folder…", #selector(openFolder(_:)), "o"))
+        file.addItem(item("Save", #selector(saveDocument(_:)), "s"))
         file.addItem(item("Close Tab", #selector(closeTab(_:)), "w"))
         let closeWindow = NSMenuItem(title: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         closeWindow.keyEquivalentModifierMask = [.command, .shift]
         file.addItem(closeWindow)
         main.addItem(submenu(file, title: "File"))
 
+        // Sent to the first responder: the editor's text view handles all of them, the code view copy and select all.
         let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(redo)
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         edit.addItem(withTitle: "Select All", action: #selector(NSResponder.selectAll(_:)), keyEquivalent: "a")
         main.addItem(submenu(edit, title: "Edit"))
 
@@ -251,8 +270,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         view.addItem(item("Changes", #selector(showChanges(_:)), "1"))
         view.addItem(item("Files", #selector(showFiles(_:)), "2"))
         view.addItem(.separator())
-        view.addItem(item("Switch Diff / File", #selector(toggleDiffFile(_:)), "d"))
-        view.addItem(item("Refresh", #selector(refresh(_:)), "r"))
+        view.addItem(item("Diff", #selector(showDiff(_:)), "d"))
+        view.addItem(item("Read", #selector(showRead(_:)), "r"))
+        view.addItem(item("Edit", #selector(showEdit(_:)), "e"))
+        let refresh = item("Refresh", #selector(refresh(_:)), "r")
+        refresh.keyEquivalentModifierMask = [.command, .shift]
+        view.addItem(refresh)
         view.addItem(.separator())
         let next = item("Next Tab", #selector(nextTab(_:)), "}")
         let previous = item("Previous Tab", #selector(previousTab(_:)), "{")
@@ -291,7 +314,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func closeTab(_ sender: Any?) { windows.keyController?.closeTab(sender) }
     @objc func showChanges(_ sender: Any?) { windows.keyController?.showChanges(sender) }
     @objc func showFiles(_ sender: Any?) { windows.keyController?.showFiles(sender) }
-    @objc func toggleDiffFile(_ sender: Any?) { windows.keyController?.toggleDiffFile(sender) }
+    @objc func showDiff(_ sender: Any?) { windows.keyController?.showDiff(sender) }
+    @objc func showRead(_ sender: Any?) { windows.keyController?.showRead(sender) }
+    @objc func showEdit(_ sender: Any?) { windows.keyController?.showEdit(sender) }
+    @objc func saveDocument(_ sender: Any?) { windows.keyController?.saveDocument(sender) }
     @objc func refresh(_ sender: Any?) { windows.keyController?.refresh(sender) }
     @objc func nextTab(_ sender: Any?) { windows.keyController?.nextTab(sender) }
     @objc func previousTab(_ sender: Any?) { windows.keyController?.previousTab(sender) }

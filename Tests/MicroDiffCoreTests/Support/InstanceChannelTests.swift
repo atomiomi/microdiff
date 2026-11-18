@@ -9,10 +9,14 @@ struct InstanceChannelTests {
 
     @Test func requestRoundTripsWithSpacesAndNonASCII() {
         let request = InstanceRequest(
-            folder: "/Users/me/My Projects/café ☕︎/日本語", openFiles: ["src/app file.ts", "/abs/Ünïcödé.swift"], mode: "file")
+            folder: "/Users/me/My Projects/café ☕︎/日本語", openFiles: ["src/app file.ts", "/abs/Ünïcödé.swift"], mode: "read")
         #expect(InstanceRequest.decode(request.encoded()) == request)
         let empty = InstanceRequest(folder: "")
         #expect(InstanceRequest.decode(empty.encoded()) == empty)
+        for mode in ["diff", "read", "edit"] {
+            let request = InstanceRequest(folder: "/a", openFiles: ["b.txt"], mode: mode)
+            #expect(InstanceRequest.decode(request.encoded()) == request)
+        }
     }
 
     @Test func replyRoundTrips() {
@@ -31,6 +35,7 @@ struct InstanceChannelTests {
         Array("MDQ1\u{0}F/a\u{0}F/b\u{0}".utf8),  // two folders
         Array("MDQ1\u{0}F/a\u{0}Xjunk\u{0}".utf8),  // unknown field
         Array("MDQ1\u{0}F/a\u{0}Mweird\u{0}".utf8),  // unknown mode
+        Array("MDQ1\u{0}F/a\u{0}Mfile\u{0}".utf8),  // the old name of the read mode
         Array("MDQ1\u{0}F/a\u{0}\u{0}".utf8),  // empty field
         Array("MDQ1\u{0}F/".utf8) + [0xFF, 0xFE, 0],  // not UTF-8
         Array("GET / HTTP/1.1\r\n\r\n".utf8),
@@ -84,6 +89,15 @@ struct InstanceChannelTests {
         times.sort()
         print(String(format: "PERF instance-claim median=%.3fms max=%.3fms", times[10], times[19]))
         #expect(times[10] < 2)
+    }
+
+    @Test func theSocketFileIsOnlyForItsOwner() throws {
+        let path = socketPath()
+        let server = try #require(owner(path))
+        defer { server.close() }
+        var info = stat()
+        #expect(lstat(path, &info) == 0)
+        #expect(info.st_mode & 0o777 == 0o600)
     }
 
     @Test func staleSocketFileFromACrashedOwnerIsReplaced() throws {

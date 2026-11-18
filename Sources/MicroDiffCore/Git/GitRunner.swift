@@ -45,10 +45,26 @@ package struct GitRunner: Sendable {
     /// - stdout and stderr are drained together, so large outputs cannot deadlock.
     /// - Throws `GitError` when the exit code is not in `allowedExitCodes` or the process cannot start (exitCode -1).
     package func run(_ args: [String], in directory: String, allowedExitCodes: Set<Int32> = [0]) throws -> Data {
+        try run(args, in: directory, allowedExitCodes: allowedExitCodes, environment: Self.environment, limit: nil)
+    }
+
+    /// Runs a command that talks to a remote repository. It can never ask anyone for anything (no prompt on a terminal,
+    /// no password window; the user's ssh and credential settings stay as they are, so keys and stored credentials still
+    /// work), and it is stopped (killed with everything it started) when `limit` runs out or is cancelled: then it
+    /// throws `GitError` with exit code -2.
+    package func runRemote(_ args: [String], in directory: String, limit: ChildProcess.Limit) throws -> Data {
+        let environment = ChildProcess.environment(overriding: Self.remoteOverrides, removing: Self.remoteRemovals)
+        return try run(args, in: directory, allowedExitCodes: [0], environment: environment, limit: limit)
+    }
+
+    private func run(
+        _ args: [String], in directory: String, allowedExitCodes: Set<Int32>, environment: [String], limit: ChildProcess.Limit?
+    ) throws -> Data {
         let argv = [gitPath, "--no-pager", "-c", "core.quotepath=false", "-c", "color.ui=false", "-C", directory] + args
-        guard let result = ChildProcess.run(path: gitPath, arguments: argv, environment: Self.environment) else {
+        guard let result = ChildProcess.run(path: gitPath, arguments: argv, environment: environment, limit: limit) else {
             throw GitError(exitCode: -1, stderr: String(cString: strerror(errno)), arguments: args)
         }
+        guard !result.wasStopped else { throw GitError(exitCode: -2, stderr: "stopped", arguments: args) }
         guard allowedExitCodes.contains(result.exitCode) else {
             let message = String(decoding: result.stderr, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
             throw GitError(exitCode: result.exitCode, stderr: message, arguments: args)
@@ -56,12 +72,24 @@ package struct GitRunner: Sendable {
         return result.stdout
     }
 
-    /// The inherited environment plus the overrides, as "KEY=value" strings. Built once.
-    private static let environment: [String] = ChildProcess.environment(overriding: [
+    private static let overrides = [
         "GIT_OPTIONAL_LOCKS": "0",
         "GIT_TERMINAL_PROMPT": "0",
         "LC_ALL": "C",
-    ])
+    ]
+
+    /// The inherited environment plus the overrides, as "KEY=value" strings. Built once.
+    private static let environment: [String] = ChildProcess.environment(overriding: overrides)
+
+    /// What a remote command sets on top: an askpass program that answers nothing, ssh never asking for a password.
+    package static let remoteOverrides = overrides.merging([
+        "GIT_ASKPASS": "/usr/bin/true",
+        "SSH_ASKPASS_REQUIRE": "never",
+        "GCM_INTERACTIVE": "never",
+    ]) { _, new in new }
+
+    /// What a remote command does not inherit: the helpers that would open a window.
+    package static let remoteRemovals = ["SSH_ASKPASS", "DISPLAY"]
 }
 
 /// Runs a child process to completion and collects its output.
@@ -74,19 +102,38 @@ package enum ChildProcess {
         package var exitCode: Int32
         package var stdout: Data
         package var stderr: Data
+        /// The process was killed because its `Limit` ran out or was cancelled (the exit code then says nothing).
+        package var wasStopped = false
     }
 
-    /// The current environment with `overrides` applied, as "KEY=value" strings.
-    package static func environment(overriding overrides: [String: String]) -> [String] {
+    /// Says when a process is to be stopped: after `seconds`, or as soon as `cancel` is cancelled.
+    package struct Limit: Sendable {
+        package var seconds: TimeInterval
+        package var cancel: CancelToken?
+
+        package init(seconds: TimeInterval, cancel: CancelToken? = nil) {
+            self.seconds = seconds
+            self.cancel = cancel
+        }
+    }
+
+    /// The current environment with `overrides` applied and the `removing` names taken out, as "KEY=value" strings.
+    package static func environment(overriding overrides: [String: String], removing removed: [String] = []) -> [String] {
         var environment = ProcessInfo.processInfo.environment
+        for key in removed { environment[key] = nil }
         for (key, value) in overrides { environment[key] = value }
         return environment.map { "\($0.key)=\($0.value)" }
     }
 
     /// Runs `path` with `arguments` (the first is the program name), stdin from /dev/null.
+    /// With a `limit` the process gets a session of its own (no terminal to ask on) and is killed together with
+    /// everything it started when the limit runs out; its pipes, thread and process are all released before this returns.
     /// Returns nil when the process cannot be started; `errno` then says why.
-    package static func run(path: String, arguments: [String], environment: [String]) -> Result? {
-        guard let (pid, outFD, errFD) = spawn(path: path, arguments: arguments, environment: environment) else { return nil }
+    package static func run(path: String, arguments: [String], environment: [String], limit: Limit? = nil) -> Result? {
+        guard let (pid, outFD, errFD) = spawn(
+            path: path, arguments: arguments, environment: environment, ownSession: limit != nil) else { return nil }
+        let deadline = limit.map { ContinuousClock.now + .seconds($0.seconds) }
+        var wasStopped = false
 
         // One thread reads both pipes: if either fills up while we block on the other, the child stalls.
         var output = Data()
@@ -97,7 +144,18 @@ package enum ChildProcess {
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
         defer { buffer.deallocate() }
         while open > 0 {
-            if poll(&fds, 2, -1) < 0 {
+            var wait: Int32 = -1
+            if let limit, let deadline {
+                let left = deadline - ContinuousClock.now
+                if left <= .zero || limit.cancel?.isCancelled == true {
+                    wasStopped = true
+                    break
+                }
+                // Short steps when it can be cancelled from outside; otherwise just until the deadline.
+                let milliseconds = Int64(left.components.seconds) * 1000 + left.components.attoseconds / 1_000_000_000_000_000
+                wait = Int32(min(milliseconds + 1, limit.cancel == nil ? Int64(Int32.max) : 100))
+            }
+            if poll(&fds, 2, wait) < 0 {
                 if errno == EINTR { continue }
                 break
             }
@@ -113,19 +171,23 @@ package enum ChildProcess {
             }
         }
         for descriptor in fds where descriptor.fd >= 0 { close(descriptor.fd) }
+        // The process leads its own group: everything it started (ssh, a remote helper) goes with it.
+        if wasStopped { kill(-pid, SIGKILL) }
 
         var status: Int32 = 0
         while waitpid(pid, &status, 0) < 0, errno == EINTR {}
         // Same decoding as the WIFEXITED / WEXITSTATUS / WTERMSIG macros.
         let signal = status & 0x7F
-        return Result(exitCode: signal == 0 ? (status >> 8) & 0xFF : 128 + signal, stdout: output, stderr: errors)
+        return Result(exitCode: signal == 0 ? (status >> 8) & 0xFF : 128 + signal, stdout: output, stderr: errors, wasStopped: wasStopped)
     }
 
     /// Serializes the short moment between creating pipes and spawning. A child spawned by another thread in
     /// that moment could inherit a pipe's write end, and its reader would then never see end-of-file.
     private static let spawnLock = NSLock()
 
-    private static func spawn(path: String, arguments: [String], environment: [String]) -> (pid: pid_t, out: Int32, err: Int32)? {
+    private static func spawn(
+        path: String, arguments: [String], environment: [String], ownSession: Bool
+    ) -> (pid: pid_t, out: Int32, err: Int32)? {
         spawnLock.lock()
         defer { spawnLock.unlock() }
 
@@ -150,7 +212,7 @@ package enum ChildProcess {
         posix_spawnattr_init(&attributes)
         defer { posix_spawnattr_destroy(&attributes) }
         // The child gets stdin/stdout/stderr and nothing else of ours.
-        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT | (ownSession ? POSIX_SPAWN_SETSID : 0)))
 
         let cArguments: [UnsafeMutablePointer<CChar>?] = arguments.map { strdup($0) } + [nil]
         let cEnvironment: [UnsafeMutablePointer<CChar>?] = environment.map { strdup($0) } + [nil]
@@ -169,5 +231,25 @@ package enum ChildProcess {
             return nil
         }
         return (pid, outPipe[0], errPipe[0])
+    }
+}
+
+/// Lets one thread stop work that another thread is doing.
+package final class CancelToken: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    package init() {}
+
+    package var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    package func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
     }
 }

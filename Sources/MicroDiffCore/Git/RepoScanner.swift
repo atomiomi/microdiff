@@ -38,7 +38,8 @@ package struct RepoScanner: Sendable {
     ///   submodules and in other nested repos) are dropped from the parent's changes. Each one whose folder really
     ///   contains a `.git` is scanned with one more status call. It gets its own `RepoSnapshot` (`isNested`, not
     ///   `isSubmodule`, name and `displayPath` = path relative to the workspace root, file paths relative to the nested
-    ///   repo) when it has changes, and its path is listed in `nestedRepoPaths` either way. A nested repo that the parent
+    ///   repo) when it has changes, and its path is listed in `nestedRepoPaths` either way. One without changes is
+    ///   reported in `quietRepos` (same snapshot, no extra git call). A nested repo that the parent
     ///   ignores is not reported by git and so is not found. A folder without `.git`, or one whose status fails
     ///   (removed meanwhile), is skipped. A nested repo without commits works like any other ("no commits").
     ///   Submodules and nested repos share the depth cap `maxSubmoduleDepth`; no folders are searched for repositories.
@@ -54,16 +55,18 @@ package struct RepoScanner: Sendable {
         let rootRepo = snapshot(status, rootPath: root, displayPath: "", name: name, isSubmodule: false)
 
         var submoduleRepos: [RepoSnapshot] = []
+        var quietRepos: [RepoSnapshot] = []
         var nestedPaths: [String] = []
-        collectChildRepos(of: status, rootPath: root, displayPath: "", depth: 1, into: &submoduleRepos, nestedPaths: &nestedPaths)
+        collectChildRepos(of: status, rootPath: root, displayPath: "", depth: 1, into: &submoduleRepos, quiet: &quietRepos, nestedPaths: &nestedPaths)
         submoduleRepos.sort { $0.displayPath < $1.displayPath }
+        quietRepos.sort { $0.displayPath < $1.displayPath }
         nestedPaths.sort()
 
         var paths: [String] = []
         collectSubmodulePaths(rootPath: root, displayPath: "", depth: 1, into: &paths)
         paths.sort()
 
-        return WorkspaceSnapshot(rootPath: root, isGitRepo: true, repos: [rootRepo] + submoduleRepos, submodulePaths: paths, nestedRepoPaths: nestedPaths)
+        return WorkspaceSnapshot(rootPath: root, isGitRepo: true, repos: [rootRepo] + submoduleRepos, submodulePaths: paths, nestedRepoPaths: nestedPaths, quietRepos: quietRepos)
     }
 
     /// The diff of one file against HEAD (staged + unstaged together), parsed.
@@ -107,14 +110,15 @@ package struct RepoScanner: Sendable {
         }
         return RepoSnapshot(
             rootPath: rootPath, displayPath: displayPath, name: name, isSubmodule: isSubmodule,
-            branchLabel: label, hasHead: status.headOID != nil, changes: status.changes, ignored: status.ignored, isNested: isNested)
+            branchLabel: label, hasHead: status.headOID != nil, changes: status.changes, ignored: status.ignored, isNested: isNested,
+            headOID: status.headOID, upstream: status.upstream, isAhead: status.isAhead, isBehind: status.isBehind)
     }
 
     /// Adds every submodule and nested repository below `parent` that has changes inside, recursing into those that
     /// were scanned. Every nested repository found (clean or not) is added to `nestedPaths`.
     private func collectChildRepos(
         of parent: RepoStatus, rootPath: String, displayPath: String, depth: Int,
-        into repos: inout [RepoSnapshot], nestedPaths: inout [String]
+        into repos: inout [RepoSnapshot], quiet: inout [RepoSnapshot], nestedPaths: inout [String]
     ) {
         guard depth <= Self.maxSubmoduleDepth else { return }
         for sub in parent.submodules where sub.hasModifiedContent || sub.hasUntrackedContent {
@@ -124,7 +128,7 @@ package struct RepoScanner: Sendable {
             if !status.changes.isEmpty {
                 repos.append(snapshot(status, rootPath: subRoot, displayPath: subDisplay, name: subDisplay, isSubmodule: true))
             }
-            collectChildRepos(of: status, rootPath: subRoot, displayPath: subDisplay, depth: depth + 1, into: &repos, nestedPaths: &nestedPaths)
+            collectChildRepos(of: status, rootPath: subRoot, displayPath: subDisplay, depth: depth + 1, into: &repos, quiet: &quiet, nestedPaths: &nestedPaths)
         }
         for candidate in parent.nestedRepoCandidates {
             let path = String(candidate.dropLast())
@@ -134,10 +138,9 @@ package struct RepoScanner: Sendable {
                   let status = readStatus(in: nestedRoot) else { continue }
             let nestedDisplay = displayPath.isEmpty ? path : displayPath + "/" + path
             nestedPaths.append(nestedDisplay)
-            if !status.changes.isEmpty {
-                repos.append(snapshot(status, rootPath: nestedRoot, displayPath: nestedDisplay, name: nestedDisplay, isSubmodule: false, isNested: true))
-            }
-            collectChildRepos(of: status, rootPath: nestedRoot, displayPath: nestedDisplay, depth: depth + 1, into: &repos, nestedPaths: &nestedPaths)
+            let nested = snapshot(status, rootPath: nestedRoot, displayPath: nestedDisplay, name: nestedDisplay, isSubmodule: false, isNested: true)
+            if status.changes.isEmpty { quiet.append(nested) } else { repos.append(nested) }
+            collectChildRepos(of: status, rootPath: nestedRoot, displayPath: nestedDisplay, depth: depth + 1, into: &repos, quiet: &quiet, nestedPaths: &nestedPaths)
         }
     }
 

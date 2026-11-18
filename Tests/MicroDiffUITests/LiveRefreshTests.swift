@@ -94,7 +94,7 @@ struct LiveRefreshTests {
         repo.write("a.txt", "0\n")
         repo.commitAll("first")
         let workspace = await startedWorkspace(repo)
-        workspace.openFile(repo.path + "/a.txt", mode: .file, pin: true)
+        workspace.openFile(repo.path + "/a.txt", mode: .read, pin: true)
 
         var text = "0\n"
         for i in 1...30 {

@@ -23,7 +23,7 @@ extension UITests {
                 let workspace = controller.workspace
                 workspace.scanNow()
                 workspace.openFile(soak.absolute("src/app.swift"), mode: .diff, pin: true, synchronously: true)
-                workspace.openFile(soak.absolute("src/mid.swift"), mode: .file, pin: false, synchronously: true)
+                workspace.openFile(soak.absolute("src/mid.swift"), mode: .read, pin: false, synchronously: true)
                 controller.showFiles(nil)
                 OffscreenPainter().paint(controller.rootView)
                 let root = controller.rootView

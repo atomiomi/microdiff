@@ -53,6 +53,20 @@ extension PerfSuite {
             #expect(report("status-20k-ignored", m, budgetMs: 80))
         }
 
+        /// The editor's change bars after a pause in typing: the HEAD version against the text, through git, off the
+        /// main thread. Measured for a 5,000-line file with 20 edited lines.
+        @Test func changeMarks() throws {
+            let git = GitRunner()
+            let base = try #require(ChangeMarks.base(MarkSource(repoRoot: Fixtures.docRepo.path, headPath: "Big.swift"), git: git))
+            let text = Fixtures.docRepoText
+            let rows = try #require(ChangeMarks.compute(text: text, base: base, repoRoot: Fixtures.docRepo.path, git: git))
+            #expect((0..<rows.rowCount).filter { rows.row(at: $0).mark == .modified }.count == 20)
+            let m = measure(iterations: 7) {
+                blackHole(ChangeMarks.compute(text: text, base: base, repoRoot: Fixtures.docRepo.path, git: git))
+            }
+            #expect(report("edit-change-marks-5000-lines", m, budgetMs: 25))
+        }
+
         @Test func documentLoad() throws {
             let scanner = RepoScanner()
             let repo = try #require(scanner.scan(root: Fixtures.docRepo.path).repos.first)

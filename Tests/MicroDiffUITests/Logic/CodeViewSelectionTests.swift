@@ -74,7 +74,7 @@ extension UITests {
         }
 
         @Test func doubleClickOnAPunctuationMarkSelectsJustThatMark() {
-            let view = view("src/app.swift", mode: .file)
+            let view = view("src/app.swift", mode: .read)
             // "let value1 = 1": the "=" is the 12th character (index 11).
             view.mouse(.down, at: at(row: 0, characters: 11.5), event: Event.mouse(clicks: 2))
             #expect(view.selectedText == "=")

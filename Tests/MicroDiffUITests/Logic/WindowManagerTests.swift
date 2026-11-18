@@ -101,9 +101,9 @@ extension UITests {
             #expect(controller(result) === window)
             #expect(await waitUntil { window.workspace.tabPaths == [repo.path + "/src/app.swift"] })
             // Relative paths are relative to the repository root, like `--open`.
-            await open(manager, repo.path, files: ["README.md"], mode: .file)
+            await open(manager, repo.path, files: ["README.md"], mode: .read)
             #expect(await waitUntil { window.workspace.tabPaths.contains(repo.path + "/README.md") })
-            #expect(window.workspace.tabs.last?.mode == .file)
+            #expect(window.workspace.tabs.last?.mode == .read)
         }
 
         @Test func aFileRequestForANewFolderOpensTheTabOnceTheFirstScanIsIn() async throws {
@@ -159,11 +159,23 @@ extension UITests {
             let repo = Fixture.changesRepo()
             let manager = manager()
             var result: WindowManager.OpenResult?
-            manager.handle(InstanceRequest(folder: repo.path, openFiles: ["src/app.swift"], mode: "file")) { result = $0 }
+            manager.handle(InstanceRequest(folder: repo.path, openFiles: ["src/app.swift"], mode: "read")) { result = $0 }
             #expect(await waitUntil { result != nil })
             let window = try #require(controller(result))
             #expect(await waitUntil { !window.workspace.tabs.isEmpty })
-            #expect(window.workspace.tabs.first?.mode == .file)
+            #expect(window.workspace.tabs.first?.mode == .read)
+        }
+
+        @Test func aRequestInEditModeOpensTheFileInTheEditor() async throws {
+            let repo = Fixture.changesRepo()
+            let manager = manager()
+            var result: WindowManager.OpenResult?
+            manager.handle(InstanceRequest(folder: repo.path, openFiles: ["src/other.swift"], mode: "edit")) { result = $0 }
+            #expect(await waitUntil { result != nil })
+            let window = try #require(controller(result))
+            #expect(await waitUntil { !window.workspace.tabs.isEmpty })
+            #expect(window.workspace.tabs.first?.mode == .edit)
+            #expect(window.rootView.editor?.textView.string == "let other = 10\nlet more = 2\n")
         }
 
         // MARK: key window and menu
@@ -190,8 +202,8 @@ extension UITests {
 
             b.windowDidBecomeKey(Notification(name: NSWindow.didBecomeKeyNotification, object: b.window))
             b.workspace.openFile(second.path + "/src/app.swift", mode: .diff, pin: true, synchronously: true)
-            delegate.toggleDiffFile(nil)
-            #expect(b.workspace.tabs.first?.mode == .file)
+            delegate.showRead(nil)
+            #expect(b.workspace.tabs.first?.mode == .read)
             delegate.closeTab(nil)
             #expect(b.workspace.tabs.isEmpty)
             #expect(a.workspace.sidebarTab == .files)

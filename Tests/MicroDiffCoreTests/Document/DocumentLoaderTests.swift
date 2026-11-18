@@ -177,12 +177,12 @@ struct DocumentLoaderTests {
         #expect(lineTexts(document.oldText) == ["line1", "line2", "line3"])
     }
 
-    // MARK: modified file, file mode
+    // MARK: modified file, read mode
 
     @Test func modifiedFileInFileModeHasOneRowPerLineWithMarks() throws {
         let repo = repo(lines: lines(30))
         let content = editedThirtyLines(repo)
-        let document = try document(request(repo, "main.swift", mode: .file))
+        let document = try document(request(repo, "main.swift", mode: .read))
 
         #expect(document.kind == .file)
         #expect(String(decoding: document.newText.data, as: UTF8.self) == content)
@@ -256,7 +256,7 @@ struct DocumentLoaderTests {
     @Test func withExpandedFoldsIsANoOpForFileDeletedAndPlainDocuments() throws {
         let repo = repo(lines: lines(30))
         _ = editedThirtyLines(repo)
-        let file = try document(request(repo, "main.swift", mode: .file))
+        let file = try document(request(repo, "main.swift", mode: .read))
         #expect(file.kind == .file)
         #expect(rows(file.withExpandedFolds([0, 5, 10])) == rows(file))
 
@@ -273,7 +273,7 @@ struct DocumentLoaderTests {
 
     // MARK: files without a diff
 
-    @Test(arguments: [ViewMode.diff, ViewMode.file])
+    @Test(arguments: [ViewMode.diff, ViewMode.read])
     func untrackedFileIsShownPlain(_ mode: ViewMode) throws {
         let repo = repo(lines: lines(3))
         repo.write("fresh.rs", text(lines(7)))
@@ -290,7 +290,7 @@ struct DocumentLoaderTests {
         #expect(document.lexer?.definition.name == "Rust")
     }
 
-    @Test(arguments: [ViewMode.diff, ViewMode.file])
+    @Test(arguments: [ViewMode.diff, ViewMode.read])
     func stagedAddedFileIsShownPlain(_ mode: ViewMode) throws {
         let repo = repo(lines: lines(3))
         repo.write("added.swift", text(lines(4)))
@@ -339,7 +339,7 @@ struct DocumentLoaderTests {
     @Test func modifiedFileWhoseOnlyChangeIsTheModeIsShownPlain() throws {
         let repo = repo(lines: lines(6))
         makeExecutable(repo.path + "/main.swift")
-        for mode in [ViewMode.diff, ViewMode.file] {
+        for mode in [ViewMode.diff, ViewMode.read] {
             let request = request(repo, "main.swift", mode: mode)
             #expect(request.change?.kind == .modified)
             let document = try document(request)
@@ -352,7 +352,7 @@ struct DocumentLoaderTests {
 
     // MARK: deleted files
 
-    @Test(arguments: [ViewMode.diff, ViewMode.file])
+    @Test(arguments: [ViewMode.diff, ViewMode.read])
     func deletedFileShowsItsOldContentsAsDeletedRows(_ mode: ViewMode) throws {
         let repo = repo(lines: lines(5))
         repo.remove("main.swift")
@@ -445,7 +445,7 @@ struct DocumentLoaderTests {
         repo.commitAll()
         repo.write("blob.bin", Data([0x00, 0x09, 0x08, 0x07, 0x00]))
         #expect(message(request(repo, "blob.bin")) == DocumentLoader.binaryMessage)
-        #expect(message(request(repo, "blob.bin", mode: .file)) == DocumentLoader.binaryMessage)
+        #expect(message(request(repo, "blob.bin", mode: .read)) == DocumentLoader.binaryMessage)
     }
 
     @Test func untrackedBinaryFileIsAMessage() {

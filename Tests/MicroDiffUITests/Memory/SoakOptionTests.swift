@@ -27,11 +27,16 @@ extension UITests {
         @Test func soakDriverRunsTheWholeRoundAndReports() async {
             let soak = SoakRepo()
             let controller = makeController(soak.path)
+            let before = fileText(soak.absolute("src/app.swift"))
             let summary = await Soak.drive(controller, iterations: 5)
             #expect(summary.hasPrefix("SOAK iterations=5 "))
             #expect(summary.contains("fds="))
             #expect(controller.workspace.tabs.isEmpty)
             #expect(controller.workspace.snapshot != nil)
+            // Every round typed into a file, saved, took it out again and saved: the file is as it was, edit mode is gone.
+            #expect(fileText(soak.absolute("src/app.swift")) == before)
+            #expect(controller.workspace.buffers.isEmpty)
+            #expect(controller.editorIsIdle)
         }
 
         @Test func memoryProbeReadsThisProcess() {

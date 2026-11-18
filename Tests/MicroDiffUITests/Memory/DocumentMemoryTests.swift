@@ -23,7 +23,7 @@ extension IsolatedMemory {
             controller.workspace.scanNow()
             let painter = OffscreenPainter()
             // Warm up: the paths below run once before measuring.
-            controller.workspace.openFile(soak.absolute("notes.txt"), mode: .file, pin: true, synchronously: true)
+            controller.workspace.openFile(soak.absolute("notes.txt"), mode: .read, pin: true, synchronously: true)
             painter.paint(controller.rootView)
             controller.workspace.closeActiveTab()
             return (soak, controller, painter)
@@ -35,7 +35,7 @@ extension IsolatedMemory {
             let workspace = controller.workspace
             await waitIdle(workspace)
             let before = await settledHeap()
-            workspace.openFile(soak.absolute("huge.txt"), mode: .file, pin: true, synchronously: true)
+            workspace.openFile(soak.absolute("huge.txt"), mode: .read, pin: true, synchronously: true)
             painter.paint(controller.rootView)
             let open = await settledHeap()
             workspace.closeActiveTab()
@@ -53,9 +53,9 @@ extension IsolatedMemory {
             let workspace = controller.workspace
             await waitIdle(workspace)
             let before = await settledHeap()
-            workspace.openFile(soak.absolute("huge.txt"), mode: .file, pin: false, synchronously: true)
+            workspace.openFile(soak.absolute("huge.txt"), mode: .read, pin: false, synchronously: true)
             painter.paint(controller.rootView)
-            workspace.openFile(soak.absolute("notes.txt"), mode: .file, pin: false, synchronously: true)
+            workspace.openFile(soak.absolute("notes.txt"), mode: .read, pin: false, synchronously: true)
             painter.paint(controller.rootView)
             #expect(workspace.tabs.count == 1)
             workspace.closeActiveTab()
@@ -69,7 +69,7 @@ extension IsolatedMemory {
         func reloads() async {
             let (soak, controller, painter) = setUp()
             let workspace = controller.workspace
-            workspace.openFile(soak.absolute("huge.txt"), mode: .file, pin: true, synchronously: true)
+            workspace.openFile(soak.absolute("huge.txt"), mode: .read, pin: true, synchronously: true)
             painter.paint(controller.rootView)
             await waitIdle(workspace)
             let open = await settledHeap()
@@ -92,7 +92,7 @@ extension IsolatedMemory {
             other.commitAll("b")
             await waitIdle(controller.workspace)
             let before = await settledHeap()
-            controller.workspace.openFile(soak.absolute("huge.txt"), mode: .file, pin: true, synchronously: true)
+            controller.workspace.openFile(soak.absolute("huge.txt"), mode: .read, pin: true, synchronously: true)
             painter.paint(controller.rootView)
             controller.open(path: other.path)
             await waitIdle(controller.workspace)
@@ -110,7 +110,7 @@ extension IsolatedMemory {
             let controller = makeController(soak.path)
             let workspace = controller.workspace
             workspace.scanNow()
-            workspace.openFile(soak.absolute("src/big.swift"), mode: .file, pin: true, synchronously: true)
+            workspace.openFile(soak.absolute("src/big.swift"), mode: .read, pin: true, synchronously: true)
             let codeView = controller.rootView.codeView
             let document = try #require(workspace.content?.document)
             let painter = OffscreenPainter()

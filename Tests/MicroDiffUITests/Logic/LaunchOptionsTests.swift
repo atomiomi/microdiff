@@ -44,6 +44,21 @@ extension UITests {
             #expect(parse(["--snapshot", "out.png"]).path == nil)
         }
 
+        @Test func sidebarTakesAWidthInPoints() {
+            #expect(parse([]).snapshotSidebarWidth == nil)
+            #expect(parse(["--sidebar", "220"]).snapshotSidebarWidth == 220)
+            #expect(parse(["--sidebar", "160.5"]).snapshotSidebarWidth == 160.5)
+        }
+
+        @Test func sidebarWithoutAUsableWidthIsIgnoredAndKeepsThePath() {
+            #expect(parse(["--sidebar"]).snapshotSidebarWidth == nil)
+            #expect(parse(["--sidebar", "wide"]).snapshotSidebarWidth == nil)
+            let options = parse(["--sidebar", "--snapshot", "out.png", "/repo"])
+            #expect(options.snapshotSidebarWidth == nil)
+            #expect(options.snapshotPath == "out.png")
+            #expect(options.path == "/repo")
+        }
+
         @Test func tabFilesSelectsTheFilesTab() {
             #expect(parse(["--tab", "files"]).sidebarTab == .files)
         }
@@ -63,12 +78,18 @@ extension UITests {
             #expect(parse(["--open"]).openFiles.isEmpty)
         }
 
-        @Test func modeFileSelectsFileMode() {
-            #expect(parse(["--mode", "file"]).mode == .file)
+        @Test func modeReadSelectsReadMode() {
+            #expect(parse(["--mode", "read"]).mode == .read)
+            #expect(parse(["--mode", "file"]).mode == nil, "the old name is gone")
         }
 
         @Test func modeDiffSelectsDiffMode() {
             #expect(parse(["--mode", "diff"]).mode == .diff)
+        }
+
+        @Test func modeEditSelectsEditMode() {
+            #expect(parse(["--mode", "edit"]).mode == .edit)
+            #expect(parse(["--mode", "write"]).mode == nil)
         }
 
         @Test func sizeIsReadAsWidthTimesHeight() {
@@ -112,13 +133,13 @@ extension UITests {
         @Test func everythingTogether() {
             let options = parse([
                 "/repo", "--snapshot", "/tmp/out.png", "--tab", "files", "--open", "a.rs", "--open", "b.rs",
-                "--mode", "file", "--size", "640x480", "--bench",
+                "--mode", "read", "--size", "640x480", "--bench",
             ])
             #expect(options.path == "/repo")
             #expect(options.snapshotPath == "/tmp/out.png")
             #expect(options.sidebarTab == .files)
             #expect(options.openFiles == ["a.rs", "b.rs"])
-            #expect(options.mode == .file)
+            #expect(options.mode == .read)
             #expect(options.snapshotSize == CGSize(width: 640, height: 480))
             #expect(options.benchmark)
         }

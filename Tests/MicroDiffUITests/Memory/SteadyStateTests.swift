@@ -53,7 +53,7 @@ extension IsolatedMemory {
             #expect(await ResourceCounts.settle(to: before).holds())
         }
 
-        @Test("tabs: open, preview replaced, switch, diff/file toggle, folds, close")
+        @Test("tabs: open, preview replaced, switch, diff/read toggle, folds, close")
         func tabs() async throws {
             let soak = SoakRepo()
             let controller = makeController(soak.path)
@@ -71,15 +71,15 @@ extension IsolatedMemory {
             let steps: [() -> Void] = [
                 { workspace.openFile(app, mode: .diff, pin: false) },
                 { workspace.openFile(notes, mode: .diff, pin: false) }, // replaces the preview
-                { workspace.openFile(mid, mode: .file, pin: true) },
+                { workspace.openFile(mid, mode: .read, pin: true) },
                 { workspace.openFile(app, mode: .diff, pin: true) },
                 { if let line = fold() { workspace.expandFold(startingAt: line) } },
-                { workspace.setMode(.file) },
+                { workspace.setMode(.read) },
                 { controller.rootView.codeView.scroll(to: CGPoint(x: 0, y: 3000)) },
                 { workspace.setMode(.diff) },
                 { workspace.selectTab(0) },
                 { controller.nextTab(nil) },
-                { controller.toggleDiffFile(nil) },
+                { controller.showRead(nil) },
                 { while !workspace.tabs.isEmpty { workspace.closeActiveTab() } },
             ]
 
@@ -97,6 +97,53 @@ extension IsolatedMemory {
             #expect(report.holds(footprintMB: 2))
         }
 
+        @Test("editing: enter edit mode, type, undo, save, leave, switch tabs")
+        func editing() async throws {
+            let soak = SoakRepo()
+            let controller = makeController(soak.path)
+            let workspace = controller.workspace
+            workspace.scanNow()
+            let painter = OffscreenPainter()
+            let app = soak.absolute("src/app.swift")
+            let mid = soak.absolute("src/mid.swift")
+            let original = try #require(fileText(app))
+
+            let steps: [() -> Void] = [
+                { workspace.openFile(app, mode: .read, pin: true) },
+                { controller.showEdit(nil) },
+                { controller.setCaret(0); controller.type("// typed\n") },
+                { controller.undo() },
+                { controller.setCaret(0); controller.type("// saved\n") },
+                { controller.saveDocument(nil) },
+                { controller.setCaret(0, length: 9); controller.deleteBackward() },
+                { controller.saveDocument(nil) },
+                { controller.scrollEditor(toLine: 300) },
+                { workspace.openFile(mid, mode: .read, pin: true) },
+                { controller.showEdit(nil) },
+                { controller.setCaret(100); controller.type("x") },
+                { workspace.selectTab(0) },
+                { controller.showRead(nil) },
+                { workspace.selectTab(1) },
+                { controller.deleteBackward() },
+                { controller.showRead(nil) },
+            ]
+
+            let report = await measureSteadyState(
+                "editing", warmup: steps.count * 6, perRound: steps.count * 3 * n, heapBudget: 512,
+                flush: { TextCache.shared.removeAll() },
+                settle: { await waitIdle(workspace) },
+                step: { i in steps[i % steps.count]() },
+                wait: {
+                    await waitIdle(workspace)
+                    await turnRunLoop()
+                    painter.paint(controller.rootView)
+                })
+            #expect(fileText(app) == original)
+            #expect(workspace.buffers.count == 2, "both tabs were edited: they keep their undo history, nothing more")
+            #expect(controller.editorIsIdle)
+            #expect(report.holds(footprintMB: 2))
+        }
+
         @Test("scrolling a long file (line layout caches fill and empty again)")
         func scrolling() async throws {
             let soak = SoakRepo()
@@ -104,7 +151,7 @@ extension IsolatedMemory {
             let controller = makeController(soak.path, width: 800, height: 400)
             let workspace = controller.workspace
             workspace.scanNow()
-            workspace.openFile(soak.absolute("src/big.swift"), mode: .file, pin: true, synchronously: true)
+            workspace.openFile(soak.absolute("src/big.swift"), mode: .read, pin: true, synchronously: true)
             let codeView = controller.rootView.codeView
             let document = try #require(workspace.content?.document)
             let painter = OffscreenPainter()

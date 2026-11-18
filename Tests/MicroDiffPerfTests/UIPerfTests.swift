@@ -1,3 +1,4 @@
+import AppKit
 import MicroDiffCore
 import Testing
 @testable import MicroDiffUI
@@ -30,6 +31,34 @@ extension PerfSuite {
                 }
             }
             #expect(report("codeview-scroll-page-avg", m, budgetMs: 8, perCall: 50))
+        }
+
+        /// Entering edit mode on a 5,000-line file: read and check the file, build its text storage, make the editor
+        /// view, lay out and draw the first screen. The editor is released in between, so every run is a first entry.
+        @Test func editMode() throws {
+            let controller = UIHarness.controller(Fixtures.docRepo.path, open: "Big.swift")
+            let enter = measure(before: {
+                if controller.workspace.tabs[0].mode == .edit { controller.showRead(nil) }
+            }) {
+                controller.showEdit(nil)
+                if let editor = UIHarness.editor(controller) { UIHarness.paint(editor) }
+            }
+            #expect(report("edit-enter-5000-lines", enter, budgetMs: 25))
+
+            // One keystroke in the middle of the screen, and the frame it causes (text and gutter).
+            if controller.workspace.tabs[0].mode != .edit { controller.showEdit(nil) }
+            let editor = try #require(UIHarness.editor(controller))
+            let rep = try #require(editor.bitmapImageRepForCachingDisplay(in: editor.bounds))
+            editor.scroll(to: ScrollSpot(line: 2500))
+            let caret = controller.workspace.activeBuffer?.characterIndex(ofLine: 2510) ?? 0
+            editor.textView.setSelectedRange(NSRange(location: caret, length: 0))
+            UIHarness.paint(editor, into: rep)
+            let key = measure(iterations: 50, warmup: 5) {
+                editor.textView.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+                UIHarness.paint(editor, into: rep)
+            }
+            #expect(controller.workspace.isUnsaved(Fixtures.docRepo.path + "/Big.swift"))
+            #expect(report("edit-keystroke-5000-lines", key, budgetMs: 8))
         }
 
         @Test func treeView() {

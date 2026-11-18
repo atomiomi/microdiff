@@ -206,7 +206,7 @@ struct InteractionTests {
         #expect(picture.isUniform(RGB(Theme.inactive), in: otherBox))
     }
 
-    @Test("the diff / file switch reports the mode that was clicked")
+    @Test("the diff / read / edit switch reports the mode that was clicked")
     func modeSwitch() {
         let bar = FileTabBarView(frame: .zero)
         let window = hostInWindow(bar, width: 900, height: 37)
@@ -216,12 +216,14 @@ struct InteractionTests {
         var modes: [ViewMode] = []
         bar.onMode = { modes.append($0) }
 
-        // The switch is right-aligned with 16 pt padding: "diff", two characters of space, "file".
-        let fileX = 900 - 16 - Theme.charWidth * 2
-        let diffX = fileX - Theme.charWidth * 6
-        bar.mouseDown(with: makeMouseDown(in: bar, at: point(fileX, 18), window: window))
+        // The switch is right-aligned with 16 pt padding: "diff", two characters of space, "read", two more, "edit".
+        let editX = 900 - 16 - Theme.charWidth * 2
+        let readX = editX - Theme.charWidth * 6
+        let diffX = readX - Theme.charWidth * 6
+        bar.mouseDown(with: makeMouseDown(in: bar, at: point(readX, 18), window: window))
         bar.mouseDown(with: makeMouseDown(in: bar, at: point(diffX, 18), window: window))
-        #expect(modes == [.file, .diff])
+        bar.mouseDown(with: makeMouseDown(in: bar, at: point(editX, 18), window: window))
+        #expect(modes == [.read, .diff, .edit])
     }
 
     @Test("with no tabs the bar ignores clicks")
@@ -297,14 +299,16 @@ struct InteractionTests {
             tabs: [FileTab(title: "a.rs", kind: .modified, isPreview: false), FileTab(title: "b.rs", kind: nil, isPreview: false)],
             activeIndex: 0, mode: .diff)
 
-        let fileX = 900 - 16 - Theme.charWidth * 2
-        let diffX = fileX - Theme.charWidth * 6
+        let editX = 900 - 16 - Theme.charWidth * 2
+        let readX = editX - Theme.charWidth * 6
+        let diffX = readX - Theme.charWidth * 6
         #expect(kind(bar.cursor(at: point(60, 18))) == .hand)
         #expect(kind(bar.cursor(at: point(133, 18))) == .hand, "close box")
         #expect(kind(bar.cursor(at: point(220, 18))) == .hand)
         #expect(kind(bar.cursor(at: point(500, 18))) == .arrow, "empty strip")
-        #expect(kind(bar.cursor(at: point(fileX, 18))) == .hand)
+        #expect(kind(bar.cursor(at: point(readX, 18))) == .hand)
         #expect(kind(bar.cursor(at: point(diffX, 18))) == .hand)
+        #expect(kind(bar.cursor(at: point(editX, 18))) == .hand)
 
         bar.update(tabs: [], activeIndex: nil, mode: .diff)
         for x in stride(from: 10.0, to: 900.0, by: 80.0) {

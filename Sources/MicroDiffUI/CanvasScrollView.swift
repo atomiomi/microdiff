@@ -70,14 +70,29 @@ class CanvasScrollView: NSView {
         override class var isCompatibleWithResponsiveScrolling: Bool { false }
     }
 
-    private final class Canvas: NSView {
+    private final class Canvas: NSView, NSViewToolTipOwner {
         weak var owner: CanvasScrollView?
         private var tracking: NSTrackingArea?
+        private var toolTipTag: NSView.ToolTipTag?
 
         override var isFlipped: Bool { true }
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
         override func draw(_ dirtyRect: NSRect) { owner?.drawCanvas() }
+
+        // One tooltip over the whole canvas; AppKit asks for its text when the pointer has rested, with the position.
+        override func setFrameSize(_ newSize: NSSize) {
+            let changed = newSize != frame.size
+            super.setFrameSize(newSize)
+            if changed || toolTipTag == nil {
+                if let toolTipTag { removeToolTip(toolTipTag) }
+                toolTipTag = addToolTip(bounds, owner: self, userData: nil)
+            }
+        }
+
+        func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
+            owner?.toolTip(atCanvasPoint: point) ?? ""
+        }
 
         override func mouseDown(with event: NSEvent) { owner?.forward(.down, event) }
         override func mouseDragged(with event: NSEvent) { owner?.forward(.dragged, event) }
@@ -247,6 +262,15 @@ class CanvasScrollView: NSView {
 
     /// Draw the content that intersects `visible`. Coordinates are content coordinates, y grows down.
     func draw(in ctx: CGContext, visible: CGRect) {}
+
+    /// The tooltip text for a point in content coordinates, nil for none. Asked when the pointer has rested there.
+    func toolTip(at point: CGPoint) -> String? { nil }
+
+    /// `toolTip(at:)` for a point in the canvas's own coordinates (the canvas follows the scroll position).
+    func toolTip(atCanvasPoint point: CGPoint) -> String? {
+        let visible = visibleContentRect
+        return toolTip(at: CGPoint(x: point.x + visible.minX, y: point.y + visible.minY))
+    }
 
     /// `point` is in content coordinates.
     func mouse(_ phase: MousePhase, at point: CGPoint, event: NSEvent) {}

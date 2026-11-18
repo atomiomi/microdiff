@@ -23,6 +23,59 @@ import Testing
         StatusParser.parse(Data((records.joined(separator: "\0") + "\0").utf8))
     }
 
+    // MARK: upstream, ahead and behind
+
+    @Test func theUpstreamAndTheAheadBehindCountsAreRead() {
+        let status = parse(
+            "# branch.oid abc", "# branch.head main", "# branch.upstream origin/main", "# branch.ab +3 -0", entry(".M", "a.txt"))
+        #expect(status.upstream == "origin/main")
+        #expect(status.isAhead)
+        #expect(!status.isBehind)
+        #expect(status.branch == "main" && status.headOID == "abc")
+        #expect(status.changes.count == 1)
+    }
+
+    @Test func behindOnlyBothAndNeither() {
+        let behind = parse("# branch.head main", "# branch.upstream origin/main", "# branch.ab +0 -12")
+        #expect(!behind.isAhead && behind.isBehind)
+        let both = parse("# branch.head main", "# branch.upstream origin/main", "# branch.ab +1 -1")
+        #expect(both.isAhead && both.isBehind)
+        let even = parse("# branch.head main", "# branch.upstream origin/main", "# branch.ab +0 -0")
+        #expect(!even.isAhead && !even.isBehind)
+        #expect(even.upstream == "origin/main")
+    }
+
+    @Test func withoutUpstreamLinesThereIsNothingToPullOrPush() {
+        let status = parse("# branch.oid abc", "# branch.head main")
+        #expect(status.upstream == nil)
+        #expect(!status.isAhead && !status.isBehind)
+    }
+
+    @Test func aDetachedHeadHasNoUpstream() {
+        let status = parse("# branch.oid abc", "# branch.head (detached)")
+        #expect(status.branch == nil && status.upstream == nil)
+        #expect(!status.isAhead && !status.isBehind)
+    }
+
+    @Test func aRepositoryWithoutCommitsHasNoUpstream() {
+        let status = parse("# branch.oid (initial)", "# branch.head main")
+        #expect(status.headOID == nil && status.upstream == nil)
+        #expect(!status.isAhead && !status.isBehind)
+    }
+
+    @Test func anUpstreamThatIsGoneHasNoCounts() {
+        // git prints the upstream name but no "branch.ab" line when the branch it names does not exist.
+        let status = parse("# branch.oid abc", "# branch.head main", "# branch.upstream origin/gone")
+        #expect(status.upstream == "origin/gone")
+        #expect(!status.isAhead && !status.isBehind)
+    }
+
+    @Test func aBrokenCountsLineIsIgnored() {
+        let status = parse("# branch.head main", "# branch.upstream origin/main", "# branch.ab +x -y")
+        #expect(!status.isAhead && !status.isBehind)
+        #expect(parse("# branch.ab +1").isAhead == false)
+    }
+
     // MARK: nested repositories
 
     @Test func untrackedEntriesEndingInASlashAreNestedRepoCandidatesNotChanges() {

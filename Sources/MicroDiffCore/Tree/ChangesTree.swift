@@ -19,18 +19,25 @@ package struct ChangesTree: Sendable {
         var name: String
         var branch: String
         var isSubmodule: Bool
+        var rootPath: String
+        /// A nested repository without changes: its header is listed (when asked to) and nothing else.
+        var isQuiet: Bool
         /// Index 0 is the repo root. Children are referenced by index, so a walk never hashes strings.
         var nodes: [Dir]
     }
 
     private let sections: [Section]
+    /// Section indexes in the order they are listed: the root repository, then the others by `displayPath`.
+    private let order: [Int]
     /// Total number of file rows when everything is expanded (= `snapshot.totalChangeCount`).
     package let fileCount: Int
 
     /// Builds the tree once. One dictionary lookup per path component, then one sort per folder.
     package init(snapshot: WorkspaceSnapshot) {
         fileCount = snapshot.totalChangeCount
-        sections = snapshot.repos.map { repo in
+        let all = snapshot.allRepos
+        let quietStart = snapshot.repos.count
+        let sections = all.enumerated().map { position, repo in
             var nodes = [Dir(name: "", path: "")]
             var index: [String: Int] = ["": 0]
             for change in repo.changes {
@@ -57,8 +64,13 @@ package struct ChangesTree: Sendable {
                 nodes[i].dirs.sort { TreeSort.lessThan(names[$0], names[$1]) }
                 nodes[i].files.sort { TreeSort.lessThan($0.name, $1.name) }
             }
-            return Section(name: repo.name, branch: repo.branchLabel, isSubmodule: repo.isSubmodule, nodes: nodes)
+            return Section(
+                name: repo.name, branch: repo.branchLabel, isSubmodule: repo.isSubmodule, rootPath: repo.rootPath,
+                isQuiet: position >= quietStart, nodes: nodes)
         }
+        self.sections = sections
+        let rest = all.indices.dropFirst().sorted { all[$0].displayPath < all[$1].displayPath }
+        order = all.isEmpty ? [] : [0] + rest
     }
 
     /// The visible rows, top to bottom.
@@ -73,18 +85,23 @@ package struct ChangesTree: Sendable {
     /// - Everything is expanded unless its row id is in `collapsed`. A collapsed repo or directory row is still listed
     ///   (with `isExpanded == false`), its descendants are not.
     /// - Row ids use `TreeRow.makeID`. For compacted directories the id path is the deepest directory path.
-    package func rows(collapsed: Set<String> = []) -> [TreeRow] {
+    /// - A nested repository without changes (`WorkspaceSnapshot.quietRepos`) gives a `.repo` row alone, with nothing under
+    ///   it, only when its `rootPath` is in `listedQuiet`; its `repoIndex` counts on after the repositories with changes.
+    ///   Among the others it sits by `displayPath`.
+    package func rows(collapsed: Set<String> = [], listedQuiet: Set<String> = []) -> [TreeRow] {
         var rows: [TreeRow] = []
         rows.reserveCapacity(fileCount + sections.count * 4)
-        for (repoIndex, section) in sections.enumerated() {
+        for repoIndex in order {
+            let section = sections[repoIndex]
+            if section.isQuiet, !listedQuiet.contains(section.rootPath) { continue }
             let id = TreeRow.makeID(repoIndex: repoIndex, kind: .repo, path: "")
             let isExpanded = !collapsed.contains(id)
             rows.append(TreeRow(
                 id: id, kind: .repo, depth: 0, name: section.name, path: "", repoIndex: repoIndex,
                 isExpanded: isExpanded, branch: section.branch, isSubmodule: section.isSubmodule,
-                gapBefore: repoIndex > 0
+                gapBefore: !rows.isEmpty
             ))
-            if isExpanded {
+            if isExpanded, !section.isQuiet {
                 appendChildren(of: 0, in: section, repoIndex: repoIndex, depth: 1, collapsed: collapsed, into: &rows)
             }
         }

@@ -28,6 +28,8 @@ package struct TreeRow: Sendable, Hashable, Identifiable {
     package var change: FileChange?
     /// Repo rows: branch label to show on the right.
     package var branch: String?
+    /// Repo rows: something to pull or to push (marks after the branch). Nil when there is nothing to show.
+    package var sync: RepoSync?
     /// Repo rows: this section is a submodule. Directory rows (files tab): this folder is a submodule.
     package var isSubmodule: Bool
     /// Directory rows in the files tab: set when something inside changed (drawn as a colored dot, or a letter for submodules).
@@ -50,6 +52,7 @@ package struct TreeRow: Sendable, Hashable, Identifiable {
         isExpanded: Bool = false,
         change: FileChange? = nil,
         branch: String? = nil,
+        sync: RepoSync? = nil,
         isSubmodule: Bool = false,
         dirMark: ChangeKind? = nil,
         gapBefore: Bool = false,
@@ -65,6 +68,7 @@ package struct TreeRow: Sendable, Hashable, Identifiable {
         self.isExpanded = isExpanded
         self.change = change
         self.branch = branch
+        self.sync = sync
         self.isSubmodule = isSubmodule
         self.dirMark = dirMark
         self.gapBefore = gapBefore

@@ -99,7 +99,7 @@ extension UITests {
 
         @Test func fileModeOfAModifiedFileMarksOnlyTheGutterNotTheRows() throws {
             // Tall enough to have the changed line (around line 20) on screen.
-            let picture = try render(Self.repo.path, open: ["src/app.swift"], mode: .file, size: CGSize(width: 800, height: 640))
+            let picture = try render(Self.repo.path, open: ["src/app.swift"], mode: .read, size: CGSize(width: 800, height: 640))
             #expect(picture.bitmap.count(near: Self.deletedTint, in: picture.mainArea) < 150 * picture.scale * picture.scale)  // anti-aliased pink text may land near the tint; a tinted row is thousands of pixels
             let bar = PixelRegion(x: 289 * picture.scale, y: 0, width: 2 * picture.scale, height: picture.bitmap.height)
             #expect(picture.bitmap.count(near: RGB(Ink.yellow.cg), in: bar) > 10 * picture.scale)
@@ -169,7 +169,7 @@ extension UITests {
 
         @Test func filesTabWithAFileOpenShowsTheWholeFileByDefault() throws {
             let picture = try render(Self.repo.path, tab: .files, open: ["src/app.swift"], size: CGSize(width: 800, height: 640))
-            // File mode: no row tints, but the changed lines are marked in the gutter.
+            // Read mode: no row tints, but the changed lines are marked in the gutter.
             #expect(picture.bitmap.count(near: Self.deletedTint, in: picture.mainArea) < 150 * picture.scale * picture.scale)  // anti-aliased pink text may land near the tint; a tinted row is thousands of pixels
             let bar = PixelRegion(x: 289 * picture.scale, y: 0, width: 2 * picture.scale, height: picture.bitmap.height)
             #expect(picture.bitmap.count(near: RGB(Ink.yellow.cg), in: bar) > 10 * picture.scale)

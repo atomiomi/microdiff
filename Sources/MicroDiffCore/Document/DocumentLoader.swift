@@ -1,9 +1,25 @@
 import Foundation
 
-/// How a changed file is shown: its diff, or the whole file.
-package enum ViewMode: UInt8, Sendable, Hashable {
+/// How a tab shows its file: the diff, the whole file (the read view), or the plain-text editor (which the loader
+/// treats like `read`).
+package enum ViewMode: UInt8, Sendable, Hashable, CaseIterable {
     case diff
-    case file
+    case read
+    case edit
+
+    /// The word used on the command line and in requests between instances.
+    package var name: String {
+        switch self {
+        case .diff: "diff"
+        case .read: "read"
+        case .edit: "edit"
+        }
+    }
+
+    package init?(name: String) {
+        guard let mode = Self.allCases.first(where: { $0.name == name }) else { return nil }
+        self = mode
+    }
 }
 
 /// What to load for one open tab.

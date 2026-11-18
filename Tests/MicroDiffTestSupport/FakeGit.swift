@@ -16,6 +16,15 @@ package final class FakeGit: @unchecked Sendable {
     /// A runner that uses this script.
     package var runner: GitRunner { GitRunner(gitPath: path) }
 
+    /// Behaves like git, but writes every call's arguments as a line to `logPath`, and runs `lsRemote` (shell code) in place
+    /// of every `git ls-remote`.
+    package static func wrapping(logTo logPath: String? = nil, lsRemote: String? = nil) -> FakeGit {
+        var body = ""
+        if let logPath { body += "echo \"$@\" >> '\(logPath)'\n" }
+        if let lsRemote { body += "case \" $* \" in *\" ls-remote \"*)\n\(lsRemote)\n;; esac\n" }
+        return FakeGit(body + "exec '\(GitRunner().gitPath)' \"$@\"")
+    }
+
     /// Waits `seconds`, then runs the real git with the same arguments.
     package static func slow(_ seconds: Double) -> FakeGit {
         FakeGit("sleep \(seconds)\nexec '\(GitRunner().gitPath)' \"$@\"")

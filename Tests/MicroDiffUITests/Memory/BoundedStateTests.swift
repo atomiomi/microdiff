@@ -58,11 +58,11 @@ extension UITests {
             let workspace = scannedWorkspace(soak.path)
             let files = ["src/app.swift", "src/mid.swift", "notes.txt"] + (0..<12).map { "pkg/m\($0)/sub/file\($0).txt" }
             for i in 0..<200 {
-                workspace.openFile(soak.absolute(files[i % files.count]), mode: .file, pin: false, synchronously: true)
+                workspace.openFile(soak.absolute(files[i % files.count]), mode: .read, pin: false, synchronously: true)
             }
             #expect(workspace.tabs.count == 1)
             for i in 0..<60 {
-                workspace.openFile(soak.absolute(files[i % 3]), mode: .file, pin: true, synchronously: true)
+                workspace.openFile(soak.absolute(files[i % 3]), mode: .read, pin: true, synchronously: true)
             }
             // A file is open in at most one tab: the preview plus the three pinned files.
             #expect(workspace.tabs.count == 4)

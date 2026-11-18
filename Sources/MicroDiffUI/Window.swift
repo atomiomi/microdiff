@@ -108,10 +108,33 @@ final class RootView: NSView {
     /// Shown in place of the code view ("no file open", "binary file").
     var message: String? {
         didSet {
-            codeView.isHidden = message != nil
-            messageLabel.isHidden = message == nil
             messageLabel.text = message ?? ""
+            updateVisibility()
         }
+    }
+
+    /// The editor: made the first time a tab enters edit mode, then kept (hidden and empty when no tab is in edit mode).
+    private(set) var editor: EditorView?
+
+    /// The editor is shown in place of the code view.
+    var showsEditor = false {
+        didSet { updateVisibility() }
+    }
+
+    func makeEditor(_ buffer: EditBuffer) -> EditorView {
+        if let editor { return editor }
+        let editor = EditorView(buffer: buffer)
+        addSubview(editor, positioned: .above, relativeTo: codeView)
+        self.editor = editor
+        updateVisibility()
+        needsLayout = true
+        return editor
+    }
+
+    private func updateVisibility() {
+        codeView.isHidden = showsEditor || message != nil
+        messageLabel.isHidden = showsEditor || message == nil
+        editor?.isHidden = !showsEditor
     }
 
     private(set) var sidebarWidth: CGFloat
@@ -162,11 +185,21 @@ final class RootView: NSView {
         }
     }
 
+    private func clampedSidebarWidth(_ width: CGFloat) -> CGFloat {
+        min(max(160, width.rounded()), max(160, bounds.width - 240))
+    }
+
     private func setSidebarWidth(_ width: CGFloat) {
-        let clamped = min(max(160, width.rounded()), max(160, bounds.width - 240))
+        let clamped = clampedSidebarWidth(width)
         guard clamped != sidebarWidth else { return }
         sidebarWidth = clamped
         UserDefaults.standard.set(Double(clamped), forKey: Self.sidebarWidthKey)
+        needsLayout = true
+    }
+
+    /// Sets the width like a drag would, without remembering it (for snapshots).
+    func setSidebarWidthTemporarily(_ width: CGFloat) {
+        sidebarWidth = clampedSidebarWidth(width)
         needsLayout = true
     }
 
@@ -184,6 +217,7 @@ final class RootView: NSView {
         tree.frame = CGRect(x: 0, y: top + Theme.tabBarHeight, width: sidebar, height: max(0, height - Theme.tabBarHeight))
         tabBar.frame = CGRect(x: mainX, y: top, width: mainWidth, height: Theme.tabBarHeight)
         codeView.frame = codeFrame
+        editor?.frame = codeFrame
         resizeHandle.frame = CGRect(x: sidebar - 2, y: top, width: 5, height: height)
         titleLine.frame = CGRect(x: 0, y: titleHeight, width: bounds.width, height: 1)
         sidebarLine.frame = CGRect(x: sidebar, y: top, width: 1, height: height)
@@ -213,13 +247,17 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     var onClose: ((MainWindowController) -> Void)?
     /// The window became the key window.
     var onBecomeKey: ((MainWindowController) -> Void)?
+    /// How questions about unsaved edits are asked (tests answer them without a dialog).
+    var prompts = Prompts.alerts
+    /// Live windows ask the remotes where their branches are; snapshots, benchmarks and soaks never do.
+    private var checksRemotes = false
 
-    init(path: String) {
+    init(path: String, remote: RemoteMonitor = RemoteMonitor()) {
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1180, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: true)
-        workspace = Workspace(path: path)
+        workspace = Workspace(path: path, remote: remote)
         folderPath = Self.canonical(path)
         super.init()
 
@@ -244,7 +282,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         root.tree.onOpen = { [weak self] row, pin in self?.workspace.open(row, pin: pin) }
         root.tabBar.onSelect = { [weak self] index in self?.workspace.selectTab(index) }
         root.tabBar.onPin = { [weak self] index in self?.workspace.pinTab(index) }
-        root.tabBar.onClose = { [weak self] index in self?.workspace.closeTab(index) }
+        root.tabBar.onClose = { [weak self] index in self?.requestCloseTab(index) }
         root.tabBar.onMode = { [weak self] mode in self?.workspace.setMode(mode) }
         root.codeView.onExpandFold = { [weak self] line in self?.workspace.expandFold(startingAt: line) }
         root.codeView.onScroll = { [weak self] offset in self?.workspace.rememberScroll(offset) }
@@ -264,13 +302,32 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
     }
 
-    /// Opens another folder in this window.
+    /// Opens another folder in this window (after asking about unsaved edits).
     func open(path: String) {
+        confirmUnsaved { [weak self] ok in
+            if ok { self?.replaceWorkspace(path: path) }
+        }
+    }
+
+    /// From now on this window (and the folders opened in it) checks its repositories against their remotes.
+    func enableRemoteChecks() {
+        checksRemotes = true
+        startRemoteChecks()
+    }
+
+    private func startRemoteChecks() {
+        workspace.remote.enable()
+        workspace.remote.setVisible(window.occlusionState.contains(.visible))
+    }
+
+    private func replaceWorkspace(path: String) {
+        workspace.remote.stop()
         workspace = Workspace(path: path)
         folderPath = Self.canonical(path)
         pendingFiles.removeAll()
         sidebarScroll.removeAll()
         connect(workspace)
+        if checksRemotes { startRemoteChecks() }
         workspace.start()
     }
 
@@ -322,12 +379,64 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     }
 
     private func refreshTabs() {
-        let tabs = workspace.tabs.map { FileTab(title: $0.title, kind: $0.change?.kind, isPreview: $0.isPreview) }
+        let tabs = workspace.tabs.map {
+            FileTab(title: $0.title, kind: $0.change?.kind, isPreview: $0.isPreview, isUnsaved: workspace.isUnsaved($0.path))
+        }
         let mode = workspace.activeTab.map { workspace.tabs[$0].mode } ?? .diff
-        root.tabBar.update(tabs: tabs, activeIndex: workspace.activeTab, mode: mode)
+        root.tabBar.update(tabs: tabs, activeIndex: workspace.activeTab, mode: mode, canEdit: workspace.canEditActiveTab)
+        let unsaved = workspace.hasUnsavedTabs
+        if window.isDocumentEdited != unsaved { window.isDocumentEdited = unsaved }
+        updateEditor(contentArrived: false)
+    }
+
+    /// Shows the open tab's buffer in the editor when it is in edit mode.
+    ///
+    /// Leaving edit mode, the editor's text stays on screen (read-only, not first responder) until what replaces it
+    /// has arrived (`contentArrived`), so there is never a blank frame. Then the editor is hidden and lets go of the
+    /// buffer. Once made, the editor stays with the window: making text views again and again leaves memory behind
+    /// in AppKit that never comes back.
+    private func updateEditor(contentArrived: Bool) {
+        guard let buffer = workspace.activeBuffer else {
+            guard let editor = root.editor, root.showsEditor else { return }
+            editor.textView.isEditable = false
+            if window.firstResponder === editor.textView { window.makeFirstResponder(root.codeView) }
+            guard contentArrived else { return }
+            root.showsEditor = false
+            editor.detach()
+            return
+        }
+        let isNew = root.editor == nil
+        let editor = root.makeEditor(buffer)
+        if isNew {
+            editor.onTextChange = { [weak self] buffer in self?.workspace.textDidChange(in: buffer) }
+            editor.onReload = { [weak self, weak editor] in
+                if let path = editor?.buffer?.path { self?.workspace.reloadFromDisk(path) }
+            }
+            editor.onKeepMine = { [weak self, weak editor] in
+                if let path = editor?.buffer?.path { self?.workspace.keepMine(path) }
+            }
+        }
+        let shown = root.showsEditor && editor.buffer === buffer && editor.textView.isEditable
+        editor.show(buffer)
+        editor.textView.isEditable = true
+        editor.conflict = buffer.session.conflict
+        root.message = nil
+        root.showsEditor = true
+        if !shown {
+            root.layoutSubtreeIfNeeded()
+            if isNew { editor.restoreState() }
+            window.makeFirstResponder(editor.textView)
+        }
     }
 
     private func showContent(keepScroll: Bool) {
+        updateEditor(contentArrived: true)
+        root.tabBar.setCanEdit(workspace.canEditActiveTab)
+        if workspace.activeBuffer != nil {
+            // The hidden code view lets go of its document while the editor is up.
+            root.codeView.setDocument(nil, keepScroll: false)
+            return
+        }
         switch workspace.content {
         case let .text(document)?:
             root.message = nil
@@ -354,19 +463,81 @@ final class MainWindowController: NSObject, NSWindowDelegate {
 
     // MARK: - Window events
 
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard workspace.hasUnsavedTabs else { return true }
+        confirmUnsaved { [weak self] ok in
+            if ok { self?.window.close() }
+        }
+        return false
+    }
+
     func windowWillClose(_ notification: Notification) {
+        workspace.remote.stop()
+        // Lets the text system go before the views do.
+        root.editor?.detach()
         onClose?(self)
+    }
+
+    // MARK: - Unsaved edits
+
+    /// Saves one tab. A failure is shown to the user and returns false (the text stays).
+    @discardableResult
+    func save(_ path: String) -> Bool {
+        do {
+            try workspace.save(path)
+            return true
+        } catch {
+            prompts.tell(error.message, window)
+            return false
+        }
+    }
+
+    /// Closes a tab, asking first when it has unsaved edits.
+    func requestCloseTab(_ index: Int) {
+        guard workspace.tabs.indices.contains(index) else { return }
+        let tab = workspace.tabs[index]
+        guard workspace.isUnsaved(tab.path) else { return workspace.closeTab(index) }
+        prompts.ask(.closeTab(name: tab.title), window) { [weak self] answer in
+            // The tab may have moved while the question was open.
+            guard let self, let index = workspace.tabs.firstIndex(where: { $0.path == tab.path }) else { return }
+            switch answer {
+            case .save: if save(tab.path) { workspace.closeTab(index) }
+            case .dontSave: workspace.closeTab(index)
+            case .cancel: break
+            }
+        }
+    }
+
+    /// Before the window's tabs go away (closing the window, quitting, opening another folder): asks once about all
+    /// unsaved tabs. `completion(true)` means go ahead.
+    func confirmUnsaved(_ completion: @escaping (Bool) -> Void) {
+        let paths = workspace.unsavedPaths
+        guard !paths.isEmpty else { return completion(true) }
+        prompts.ask(.closeWindow(fileCount: paths.count), window) { [weak self] answer in
+            guard let self else { return completion(false) }
+            switch answer {
+            case .save: completion(workspace.unsavedPaths.allSatisfy { self.save($0) })
+            case .dontSave: completion(true)
+            case .cancel: completion(false)
+            }
+        }
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
         onBecomeKey?(self)
+        workspace.remote.windowBecameKey()
+    }
+
+    /// Minimized, hidden or covered windows are not visible: the remote timer rests.
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        workspace.remote.setVisible(window.occlusionState.contains(.visible))
     }
 
     // MARK: - Menu actions
 
     @objc func closeTab(_ sender: Any?) {
-        if workspace.activeTab != nil {
-            workspace.closeActiveTab()
+        if let active = workspace.activeTab {
+            requestCloseTab(active)
         } else {
             window.performClose(sender)
         }
@@ -375,12 +546,25 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     @objc func showChanges(_ sender: Any?) { selectSidebarTab(.changes) }
     @objc func showFiles(_ sender: Any?) { selectSidebarTab(.files) }
 
-    @objc func toggleDiffFile(_ sender: Any?) {
-        guard let active = workspace.activeTab else { return }
-        workspace.setMode(workspace.tabs[active].mode == .diff ? .file : .diff)
+    /// `⌘D`, `⌘R`, `⌘E`: straight to a mode (the mode the tab is in already: nothing). A file that cannot be edited
+    /// stays as it is, and `edit` is dimmed.
+    @objc func showDiff(_ sender: Any?) { workspace.setMode(.diff) }
+    @objc func showRead(_ sender: Any?) { workspace.setMode(.read) }
+    @objc func showEdit(_ sender: Any?) {
+        // Like a click on the word: a file known not to be editable is left alone, not read again.
+        if workspace.canEditActiveTab { workspace.setMode(.edit) }
     }
 
-    @objc func refresh(_ sender: Any?) { workspace.refresh() }
+    /// `⌘S`: saves the open tab when it has unsaved edits.
+    @objc func saveDocument(_ sender: Any?) {
+        guard let active = workspace.activeTab, workspace.isUnsaved(workspace.tabs[active].path) else { return }
+        save(workspace.tabs[active].path)
+    }
+
+    @objc func refresh(_ sender: Any?) {
+        workspace.refresh()
+        workspace.remote.refresh()
+    }
 
     @objc func nextTab(_ sender: Any?) { stepTab(1) }
     @objc func previousTab(_ sender: Any?) { stepTab(-1) }
@@ -404,12 +588,16 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     // MARK: - Snapshots (for tests and visual checks)
 
     /// Loads everything on the calling thread and renders the window content to PNG data.
-    func renderSnapshot(size: CGSize, sidebarTab: SidebarTab, open relativePaths: [String], mode: ViewMode?, scroll: CGFloat = 0) -> Data? {
+    func renderSnapshot(
+        size: CGSize, sidebarTab: SidebarTab, open relativePaths: [String], mode: ViewMode?, scroll: CGFloat = 0, sidebarWidth: CGFloat? = nil
+    ) -> Data? {
         window.setContentSize(size)
+        root.layoutSubtreeIfNeeded()
+        if let sidebarWidth { root.setSidebarWidthTemporarily(sidebarWidth) }
         workspace.scanNow()
         for relativePath in relativePaths {
             let path = relativePath.hasPrefix("/") ? relativePath : workspace.rootPath + "/" + relativePath
-            workspace.openFile(path, mode: mode ?? (sidebarTab == .changes ? .diff : .file), pin: true, synchronously: true)
+            workspace.openFile(path, mode: mode ?? (sidebarTab == .changes ? .diff : .read), pin: true, synchronously: true)
         }
         if sidebarTab != workspace.sidebarTab { workspace.selectSidebarTab(sidebarTab) }
         root.layoutSubtreeIfNeeded()

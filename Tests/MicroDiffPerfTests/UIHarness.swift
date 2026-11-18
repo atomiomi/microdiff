@@ -39,6 +39,28 @@ enum UIHarness {
         view.setDocument(document, keepScroll: false)
     }
 
+    /// The app's window controller (never shown) with `file` open in the read view.
+    static func controller(_ path: String, open file: String) -> MainWindowController {
+        _ = NSApplication.shared
+        let controller = MainWindowController(path: path)
+        controller.window.setContentSize(NSSize(width: 1180, height: 720))
+        controller.workspace.scanNow()
+        controller.workspace.openFile(path + "/" + file, mode: .read, pin: true, synchronously: true)
+        controller.window.contentView?.layoutSubtreeIfNeeded()
+        return controller
+    }
+
+    static func editor(_ controller: MainWindowController) -> EditorView? {
+        (controller.window.contentView as? RootView)?.editor
+    }
+
+    /// Draws a view into a bitmap the way the window would draw it (layout first).
+    static func paint(_ view: NSView, into rep: NSBitmapImageRep? = nil) {
+        view.layoutSubtreeIfNeeded()
+        guard let rep = rep ?? view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: rep)
+    }
+
     /// Scrolls down by one page less two lines, like the Page Down key.
     static func pageDown(_ view: CodeView) {
         view.scroll(by: CGPoint(x: 0, y: view.visibleContentRect.height - 40))

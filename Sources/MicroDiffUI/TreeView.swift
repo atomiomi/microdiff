@@ -103,6 +103,8 @@ final class TreeView: CanvasScrollView {
     /// Top edge of every row, plus the bottom of the last one.
     private var tops: [CGFloat] = [0]
     private var hoverIndex: Int?
+    /// What repository rows with a branch show for a name, branch and width (see `repoText`). Dropped with the rows.
+    private var repoTexts: [RepoTextKey: RepoRowText.Fit] = [:]
 
     private static let topPadding: CGFloat = 8
     private static let bottomPadding: CGFloat = 8
@@ -135,6 +137,7 @@ final class TreeView: CanvasScrollView {
 
     func setRows(_ newRows: [TreeRow]) {
         rows = newRows
+        repoTexts.removeAll(keepingCapacity: true)
         tops.removeAll(keepingCapacity: true)
         tops.reserveCapacity(newRows.count + 1)
         var y = Self.topPadding
@@ -391,23 +394,109 @@ final class TreeView: CanvasScrollView {
         return CGColor(colorSpace: base.colorSpace ?? CGColorSpaceCreateDeviceRGB(), components: [mix(0), mix(1), mix(2), 1])!
     }
 
-    /// Repository rows: name on the left, branch on the right, the name shortened when both do not fit.
+    // Repository rows: the name on the left, then 8 pt, the 12 pt branch icon, 4 pt and the branch, which ends at the
+    // right edge, or 8 pt before the marks when there is something to pull (down arrow) or push (up arrow); one space
+    // between the arrows.
+    private static let branchIconSize: CGFloat = 12
+    private static let repoFixedWidth: CGFloat = 8 + branchIconSize + 4
+    private static let marksGap: CGFloat = 8
+    private static let pullArrowWidth: CGFloat = TextCache.shared.line("↓", .small, .red).width
+    private static let pushArrowWidth: CGFloat = TextCache.shared.line("↑", .small, .green).width
+    private static let markSpaceWidth: CGFloat = TextCache.shared.line(" ", .small, .dim).width
+    private static let repoTextMemoLimit = 64
+
+    /// Room the marks of a repository row take at its right end, the gap before them included. 0 without marks.
+    private static func marksWidth(of sync: RepoSync?) -> CGFloat {
+        guard let sync, sync.pull || sync.push else { return 0 }
+        var width = marksGap
+        if sync.pull { width += pullArrowWidth }
+        if sync.push { width += pushArrowWidth }
+        if sync.pull, sync.push { width += markSpaceWidth }
+        return width
+    }
+
+    private struct RepoTextKey: Hashable {
+        var name: String
+        var branch: String
+        var budget: CGFloat
+    }
+
+    /// Width of the room for a repository row's name and branch text together, in a tree `width` wide.
+    private static func repoTextBudget(of row: TreeRow, width: CGFloat) -> CGFloat {
+        let textLeft = Theme.treePadding + CGFloat(row.depth) * Theme.treeIndent + Theme.iconSize + 6
+        return max(0, width - Theme.treePadding - textLeft - repoFixedWidth - marksWidth(of: row.sync))
+    }
+
+    /// What a repository row with a branch shows in `budget` points. Worked out once per name, branch and width.
+    private func repoText(of row: TreeRow, branch: String, budget: CGFloat) -> RepoRowText.Fit {
+        let key = RepoTextKey(name: row.name, branch: branch, budget: budget)
+        if let fit = repoTexts[key] { return fit }
+        if repoTexts.count >= Self.repoTextMemoLimit { repoTexts.removeAll(keepingCapacity: true) }
+        let fit = RepoRowText.fit(
+            name: row.name, branch: branch, budget: Double(budget),
+            measureName: { Double(TextCache.makeLine([TextRun($0, .fg)], .regular).width) },
+            measureBranch: { Double(TextCache.makeLine([TextRun($0, .dim)], .small).width) })
+        repoTexts[key] = fit
+        return fit
+    }
+
+    override func toolTip(at point: CGPoint) -> String? {
+        toolTip(at: point, now: Date())
+    }
+
+    /// The tooltip of a repository row, in content coordinates; nil for every other row and when there is nothing to say.
+    /// Lines, those that apply: the full `name  ·  branch` when what is drawn is shortened, what there is to pull,
+    /// what there is to push. Worked out when asked, so "checked 2 minutes ago" is right when it is shown.
+    func toolTip(at point: CGPoint, now: Date) -> String? {
+        guard let index = rowIndex(atY: point.y), rows[index].kind == .repo else { return nil }
+        let row = rows[index]
+        var lines: [String] = []
+        if let branch = row.branch {
+            let budget = Self.repoTextBudget(of: row, width: visibleContentRect.width)
+            if repoText(of: row, branch: branch, budget: budget).isShortened { lines.append("\(row.name)  ·  \(branch)") }
+        }
+        lines += row.sync?.toolTipLines(now: now) ?? []
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
+    /// Repository rows: name on the left, branch on the right. When both do not fit, each is shortened in the middle.
     private func drawRepoName(
         _ row: TreeRow, style: TreeRowStyle, in ctx: CGContext, textX: CGFloat, right edge: CGFloat, rowY y: CGFloat, rowHeight h: CGFloat
     ) {
-        var right = edge
+        let name: CTLine
         if let branch = row.branch {
-            let textLeft = ctx.drawRightAligned(branch, .small, .dim, right: right, rowY: y, rowHeight: h)
-            let size: CGFloat = 12
-            Icon.branch.draw(in: ctx, x: textLeft - 4 - size, y: y + ((h - size) / 2).rounded(), size: size, color: Ink.icon.cg)
-            right = textLeft - 4 - size - 8
+            let budget = Self.repoTextBudget(of: row, width: visibleContentRect.width)
+            let fit = repoText(of: row, branch: branch, budget: budget)
+            let branchLine = TextCache.shared.line(fit.branch, .small, .dim)
+            let textLeft = edge - Self.marksWidth(of: row.sync) - branchLine.width
+            if let sync = row.sync { drawMarks(sync, in: ctx, right: edge, rowY: y, rowHeight: h) }
+            if !fit.branch.isEmpty { ctx.draw(branchLine, x: textLeft, rowY: y, rowHeight: h, face: .small) }
+            if budget > 0 {
+                let size = Self.branchIconSize
+                Icon.branch.draw(in: ctx, x: textLeft - 4 - size, y: y + ((h - size) / 2).rounded(), size: size, color: Ink.icon.cg)
+            }
+            name = TextCache.shared.line(fit.name, .regular, style.nameInk)
+        } else {
+            name = nameLine(for: row, ink: style.nameInk).truncated(to: max(0, edge - textX), face: .regular, ink: style.nameInk)
         }
-        let available = max(0, right - textX)
-        let line = nameLine(for: row, ink: style.nameInk).truncated(to: available, face: .regular, ink: style.nameInk)
-        ctx.draw(line, x: textX, rowY: y, rowHeight: h, face: .regular)
+        ctx.draw(name, x: textX, rowY: y, rowHeight: h, face: .regular)
         if style.strikethrough {
             let strikeY = y + (h / 2).rounded() + 0.5
-            ctx.fill(CGRect(x: textX, y: strikeY, width: min(line.width, available), height: 1), style.nameInk.cg)
+            ctx.fill(CGRect(x: textX, y: strikeY, width: name.width, height: 1), style.nameInk.cg)
+        }
+    }
+
+    /// The arrows at the right end of a repository row: push on the edge, then a space, then pull.
+    private func drawMarks(_ sync: RepoSync, in ctx: CGContext, right: CGFloat, rowY y: CGFloat, rowHeight h: CGFloat) {
+        var x = right
+        if sync.push {
+            x -= Self.pushArrowWidth
+            ctx.draw("↑", .small, .green, x: x, rowY: y, rowHeight: h)
+            if sync.pull { x -= Self.markSpaceWidth }
+        }
+        if sync.pull {
+            x -= Self.pullArrowWidth
+            ctx.draw("↓", .small, .red, x: x, rowY: y, rowHeight: h)
         }
     }
 

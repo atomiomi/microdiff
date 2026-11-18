@@ -44,7 +44,7 @@ extension UITests {
             let workspace = workspace()
             workspace.open(Self.repo, appFile, pin: true)
             workspace.open(Self.repo, otherFile, pin: false)
-            workspace.open(Self.repo, "README.md", mode: .file, pin: true)
+            workspace.open(Self.repo, "README.md", mode: .read, pin: true)
             workspace.open(Self.repo, freshFile, pin: false)
             #expect(workspace.tabPaths == [path(appFile), path(freshFile), path("README.md")])
             #expect(workspace.activeTab == 1)
@@ -280,8 +280,8 @@ extension UITests {
             workspace.open(Self.repo, appFile)
             #expect(workspace.content?.document?.kind == .diff)
 
-            workspace.setMode(.file)
-            #expect(workspace.tabs[0].mode == .file)
+            workspace.setMode(.read)
+            #expect(workspace.tabs[0].mode == .read)
             #expect(await waitUntil { workspace.content?.document?.kind == .file })
 
             workspace.setMode(.diff)
@@ -300,21 +300,21 @@ extension UITests {
 
         @Test func setModeWithoutATabIsIgnored() {
             let workspace = workspace()
-            workspace.setMode(.file)
+            workspace.setMode(.read)
             #expect(workspace.tabs.isEmpty)
         }
 
         @Test func setModeOnlyChangesTheActiveTab() {
             let workspace = threeTabs()
-            workspace.setMode(.file)
-            #expect(workspace.tabs.map(\.mode) == [.diff, .diff, .file])
+            workspace.setMode(.read)
+            #expect(workspace.tabs.map(\.mode) == [.diff, .diff, .read])
         }
 
         @Test func setModeResetsTheTabsScrollPosition() {
             let workspace = workspace()
             workspace.open(Self.repo, appFile)
             workspace.rememberScroll(CGPoint(x: 0, y: 200))
-            workspace.setMode(.file)
+            workspace.setMode(.read)
             #expect(workspace.activeScroll == .zero)
         }
 
@@ -323,7 +323,7 @@ extension UITests {
             workspace.open(Self.repo, freshFile)
             var reloads = 0
             workspace.onContentChanged = { _ in reloads += 1 }
-            workspace.setMode(.file)
+            workspace.setMode(.read)
             #expect(await waitUntil { reloads == 1 })
             #expect(workspace.content?.document?.kind == .plain)
         }
@@ -361,7 +361,7 @@ extension UITests {
             let foldCount = try #require(workspace.content?.document?.rows.foldCount)
             workspace.expandFold(startingAt: try #require(firstFoldLine(workspace)))
 
-            workspace.setMode(.file)
+            workspace.setMode(.read)
             #expect(await waitUntil { workspace.content?.document?.kind == .file })
             workspace.setMode(.diff)
             #expect(await waitUntil { workspace.content?.document?.kind == .diff })
@@ -373,7 +373,7 @@ extension UITests {
             workspace.expandFold(startingAt: 3)
             #expect(workspace.content == nil)
 
-            workspace.open(Self.repo, appFile, mode: .file)
+            workspace.open(Self.repo, appFile, mode: .read)
             #expect(workspace.content?.document?.kind == .file)
             workspace.expandFold(startingAt: 3)
             #expect(workspace.tabs[0].expandedFolds.isEmpty)
@@ -452,7 +452,7 @@ extension UITests {
 
         @Test func unchangedFileHasNoRowInTheChangesTabButOneInTheFilesTab() throws {
             let workspace = workspace()
-            workspace.open(Self.repo, "README.md", mode: .file)
+            workspace.open(Self.repo, "README.md", mode: .read)
             #expect(workspace.selectedRowID == nil)
             workspace.selectSidebarTab(.files)
             let id = try #require(workspace.selectedRowID)
@@ -484,7 +484,7 @@ extension UITests {
 
         @Test func revealingAnUnchangedNestedFileWorksToo() {
             let workspace = workspace()
-            workspace.open(Self.repo, "src/ui/widgets/panel.swift", mode: .file)
+            workspace.open(Self.repo, "src/ui/widgets/panel.swift", mode: .read)
             workspace.selectSidebarTab(.files)
             #expect(workspace.row(path: "src/ui/widgets/panel.swift") != nil)
         }

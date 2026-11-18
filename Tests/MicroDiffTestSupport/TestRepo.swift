@@ -13,6 +13,11 @@ package final class TestRepo: @unchecked Sendable {
         git("init", "--quiet")
     }
 
+    /// Creates the folder as a clone of the repository at `source` (a path).
+    package init(cloning source: String) {
+        git("clone", "--quiet", source, ".")
+    }
+
     @discardableResult
     package func write(_ relativePath: String, _ contents: String) -> String {
         dir.write(relativePath, contents)
@@ -45,6 +50,16 @@ package final class TestRepo: @unchecked Sendable {
     package func commitAll(_ message: String = "commit", in subfolder: String? = nil) {
         git("add", "-A", in: subfolder)
         git("commit", "--quiet", "--allow-empty", "-m", message, in: subfolder)
+    }
+
+    /// Every file and folder below `.git` with its size, sorted: to see that nothing was written.
+    package func gitFolderListing() -> [String] {
+        let base = path + "/.git"
+        let names = (try? FileManager.default.subpathsOfDirectory(atPath: base)) ?? []
+        return names.sorted().map { name in
+            let size = (try? FileManager.default.attributesOfItem(atPath: base + "/" + name)[.size] as? Int) ?? nil
+            return "\(name) \(size ?? -1)"
+        }
     }
 
     /// Adds `source` as a submodule at `path`. Stages the change; commit it with `commitAll`.

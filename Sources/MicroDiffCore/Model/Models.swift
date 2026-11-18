@@ -73,8 +73,20 @@ package struct RepoStatus: Sendable, Hashable {
     /// Untracked entries that end in `/` (git does not look inside): folders that may be nested git repositories,
     /// repo-relative, trailing slash kept. Whether they really are repositories is for the scanner to check.
     package var nestedRepoCandidates: [String]
+    /// The branch this one follows (`origin/main`). Nil when it follows none, or HEAD is detached.
+    package var upstream: String?
+    /// This clone has commits that the upstream branch does not have (as of the last fetch).
+    package var isAhead: Bool
+    /// The upstream branch has commits that this clone does not have (as of the last fetch).
+    package var isBehind: Bool
 
-    package init(branch: String? = nil, headOID: String? = nil, changes: [FileChange] = [], submodules: [SubmoduleState] = [], ignored: [String] = [], nestedRepoCandidates: [String] = []) {
+    package init(
+        branch: String? = nil, headOID: String? = nil, changes: [FileChange] = [], submodules: [SubmoduleState] = [], ignored: [String] = [],
+        nestedRepoCandidates: [String] = [], upstream: String? = nil, isAhead: Bool = false, isBehind: Bool = false
+    ) {
+        self.upstream = upstream
+        self.isAhead = isAhead
+        self.isBehind = isBehind
         self.branch = branch
         self.headOID = headOID
         self.changes = changes
@@ -103,8 +115,23 @@ package struct RepoSnapshot: Sendable, Hashable {
     /// A separate git repository inside the workspace that the parent does not know (not a submodule). Shown as its
     /// own section like a submodule, but with the repository icon.
     package var isNested: Bool
+    /// Full object id of HEAD. Nil when there are no commits.
+    package var headOID: String?
+    /// The branch this repository's branch follows (`origin/main`); nil when it follows none or HEAD is detached.
+    package var upstream: String?
+    /// Commits here that the upstream does not have / the other way round, as of the last fetch.
+    package var isAhead: Bool
+    package var isBehind: Bool
 
-    package init(rootPath: String, displayPath: String, name: String, isSubmodule: Bool, branchLabel: String, hasHead: Bool, changes: [FileChange], ignored: [String] = [], isNested: Bool = false) {
+    package init(
+        rootPath: String, displayPath: String, name: String, isSubmodule: Bool, branchLabel: String, hasHead: Bool, changes: [FileChange],
+        ignored: [String] = [], isNested: Bool = false, headOID: String? = nil, upstream: String? = nil, isAhead: Bool = false,
+        isBehind: Bool = false
+    ) {
+        self.headOID = headOID
+        self.upstream = upstream
+        self.isAhead = isAhead
+        self.isBehind = isBehind
         self.rootPath = rootPath
         self.displayPath = displayPath
         self.name = name
@@ -124,14 +151,22 @@ package struct WorkspaceSnapshot: Sendable, Hashable {
     package var isGitRepo: Bool
     /// The root repository first (always present when `isGitRepo`, even with no changes),
     /// then every submodule or nested repository that has changes inside, sorted by `displayPath`.
+    /// Everything that is about changes (tabs, the change index, counts) reads this list; `quietRepos` is separate.
     package var repos: [RepoSnapshot]
     /// All known submodule paths relative to the workspace root, sorted. Used to mark submodule folders in the files tab.
     package var submodulePaths: [String]
     /// Workspace-relative paths of nested git repositories (untracked folders that hold their own `.git`, found only
     /// through what git reports), sorted. Includes clean ones. Used to mark their folders in the files tab.
     package var nestedRepoPaths: [String]
+    /// Nested repositories without local changes, sorted by `displayPath`. Not sections: the changes tab lists one (as a
+    /// header alone) only while it has something to pull or push. They are here so the remote checks know them.
+    package var quietRepos: [RepoSnapshot]
 
-    package init(rootPath: String, isGitRepo: Bool, repos: [RepoSnapshot] = [], submodulePaths: [String] = [], nestedRepoPaths: [String] = []) {
+    package init(
+        rootPath: String, isGitRepo: Bool, repos: [RepoSnapshot] = [], submodulePaths: [String] = [], nestedRepoPaths: [String] = [],
+        quietRepos: [RepoSnapshot] = []
+    ) {
+        self.quietRepos = quietRepos
         self.rootPath = rootPath
         self.isGitRepo = isGitRepo
         self.repos = repos
@@ -139,12 +174,15 @@ package struct WorkspaceSnapshot: Sendable, Hashable {
         self.nestedRepoPaths = nestedRepoPaths
     }
 
+    /// Every repository the scan found: the sections with changes, then the quiet ones. A row's `repoIndex` indexes this.
+    package var allRepos: [RepoSnapshot] { repos + quietRepos }
+
     package var totalChangeCount: Int {
         repos.reduce(0) { $0 + $1.changes.count }
     }
 }
 
-/// Row heights used to lay out the diff and file views.
+/// Row heights used to lay out the diff and read views.
 package struct RowMetrics: Sendable, Hashable {
     package var lineHeight: Double
     package var foldHeight: Double

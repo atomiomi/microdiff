@@ -38,7 +38,7 @@ struct NestedRepoDocumentTests {
     @Test func fileModeShowsTheWholeFile() throws {
         let (repo, nested) = fixture()
         defer { withExtendedLifetime(repo) {} }
-        let document = try #require(load(nested, "a.txt", .file))
+        let document = try #require(load(nested, "a.txt", .read))
         #expect(lines(document.newText) == ["one", "TWO", "three", "four"])
         #expect(document.rows.rowCount == 4)
     }

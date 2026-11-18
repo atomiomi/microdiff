@@ -260,7 +260,7 @@ final class CodeView: CanvasScrollView {
         let barInk: Ink? = switch row.kind {
         case .added: .green
         case .deleted: .red
-        default: row.mark == .added ? .green : row.mark == .modified ? .yellow : nil
+        default: GutterView.barInk(row.mark)
         }
         if let barInk {
             ctx.fill(CGRect(x: gutterX, y: y, width: Theme.gutterBarWidth, height: height), barInk.cg)

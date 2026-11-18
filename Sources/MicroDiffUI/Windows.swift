@@ -23,9 +23,12 @@ final class WindowManager {
     /// Requests that came in before the app finished launching.
     private var pending: [(request: InstanceRequest, completion: (OpenResult) -> Void)] = []
     private(set) var isReady = false
+    /// Windows check their repositories against the remotes (false for snapshots, benchmarks and tests).
+    let checksRemotes: Bool
 
-    init(showsWindows: Bool = true) {
+    init(showsWindows: Bool = true, checksRemotes: Bool = false) {
         self.showsWindows = showsWindows
+        self.checksRemotes = checksRemotes
     }
 
     /// The window menu commands act on: the key window's, else the one that was key last, else the newest.
@@ -43,6 +46,7 @@ final class WindowManager {
     @discardableResult
     func makeWindow(path: String) -> MainWindowController {
         let controller = MainWindowController(path: path)
+        if checksRemotes { controller.enableRemoteChecks() }
         place(controller)
         controllers.append(controller)
         controller.onClose = { [weak self] controller in self?.closed(controller) }
@@ -119,7 +123,7 @@ final class WindowManager {
             pending.append((request, completion))
             return
         }
-        let mode: ViewMode? = request.mode.map { $0 == "file" ? .file : .diff }
+        let mode = request.mode.flatMap(ViewMode.init(name:))
         open(folder: request.folder, files: request.openFiles, mode: mode, completion: completion)
     }
 
@@ -178,6 +182,24 @@ final class WindowManager {
     /// `path` is `folder` or inside it.
     static func contains(_ folder: String, _ path: String) -> Bool {
         path == folder || path.hasPrefix(folder.hasSuffix("/") ? folder : folder + "/")
+    }
+
+    // MARK: - Quitting
+
+    var hasUnsavedEdits: Bool { controllers.contains { $0.workspace.hasUnsavedTabs } }
+
+    /// Asks each window with unsaved edits in turn (brought to the front first). `completion(true)` when all may go,
+    /// false as soon as one says Cancel or fails to save.
+    func confirmQuit(_ completion: @escaping (Bool) -> Void) {
+        let asking = controllers.filter { $0.workspace.hasUnsavedTabs }
+        func ask(_ index: Int) {
+            guard index < asking.count else { return completion(true) }
+            present(asking[index])
+            asking[index].confirmUnsaved { ok in
+                if ok { ask(index + 1) } else { completion(false) }
+            }
+        }
+        ask(0)
     }
 
     // MARK: - Window menu

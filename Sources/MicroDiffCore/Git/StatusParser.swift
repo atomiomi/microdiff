@@ -6,6 +6,8 @@ package enum StatusParser {
     /// Records are NUL-terminated. Header records start with "# ":
     /// - `# branch.oid <oid>` or `# branch.oid (initial)` (no commits yet -> `headOID` nil)
     /// - `# branch.head <name>` or `# branch.head (detached)` (-> `branch` nil)
+    /// - `# branch.upstream <name>` (the branch it follows; absent without one) -> `upstream`
+    /// - `# branch.ab +<ahead> -<behind>` (only with an upstream) -> `isAhead`, `isBehind`
     /// - other headers are ignored.
     ///
     /// Entry records:
@@ -117,6 +119,14 @@ package enum StatusParser {
         } else if hasPrefix(rec, "# branch.head ") {
             let value = string(rec, from: 14)
             status.branch = value == "(detached)" ? nil : value
+        } else if hasPrefix(rec, "# branch.upstream ") {
+            status.upstream = string(rec, from: 18)
+        } else if hasPrefix(rec, "# branch.ab +") {
+            // "+<ahead> -<behind>"
+            let counts = string(rec, from: 13).split(separator: " ")
+            guard counts.count == 2, let ahead = Int(counts[0]), let behind = Int(counts[1].dropFirst()) else { return }
+            status.isAhead = ahead > 0
+            status.isBehind = behind > 0
         }
     }
 
