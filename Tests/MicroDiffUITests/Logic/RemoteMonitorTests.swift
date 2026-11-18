@@ -195,7 +195,7 @@ extension UITests {
             #expect(fixture.mostRemoteCallsAtOnce == 1)
         }
 
-        @Test func repositoriesAreCheckedOneAfterAnother() async {
+        @Test func fewRepositoriesAreAllAskedAtTheSameTime() async {
             let fixture = RemoteFixture(lsRemote: "sleep 0.2")
             let nested = fixture.remote.clone(pushingFirstCommit: false)
             let monitor = fixture.makeMonitor()
@@ -203,7 +203,7 @@ extension UITests {
             monitor.update(repos: [fixture.snapshot(), RepoScanner().scan(root: nested.path).repos[0]])
             monitor.refresh()
             #expect(await waitUntil(timeout: .seconds(20)) { fixture.remoteCalls == 2 && !monitor.isRunning })
-            #expect(fixture.mostRemoteCallsAtOnce == 1)
+            #expect(fixture.mostRemoteCallsAtOnce == 2)
         }
 
         // MARK: After a pull
@@ -301,6 +301,101 @@ extension UITests {
             monitor.update(repos: RepoScanner().scan(root: fixture.repo.path).allRepos)
             #expect(monitor.sync(for: snapshot.quietRepos[0]) == nil, "what was learned about it is gone")
             withExtendedLifetime(other) {}
+        }
+
+        // MARK: Several at a time
+
+        /// The fixture's own repository and `count` more, all given to a visible, enabled monitor.
+        private func manyRepos(_ fixture: RemoteFixture, _ count: Int) -> (monitor: RemoteMonitor, repos: [RepoSnapshot], keep: Any) {
+            let more = fixture.moreRepos(count)
+            let repos = [fixture.snapshot()] + more.map { fixture.snapshot(of: $0.repo) }
+            let monitor = fixture.makeMonitor()
+            monitor.enable()
+            monitor.update(repos: repos)
+            return (monitor, repos, more)
+        }
+
+        @Test func severalRepositoriesAreAskedAtTheSameTimeButNeverMoreThanFour() async {
+            let fixture = RemoteFixture(lsRemote: "sleep 0.4")
+            let (monitor, repos, keep) = manyRepos(fixture, 11)
+            monitor.refresh()
+            #expect(await waitUntil(timeout: .seconds(30)) { fixture.remoteCalls == 12 && !monitor.isRunning })
+            #expect(fixture.mostRemoteCallsAtOnce > 1)
+            #expect(fixture.mostRemoteCallsAtOnce <= RemoteMonitor.maxCallsAtOnce)
+            #expect(RemoteMonitor.maxCallsAtOnce == 4)
+            #expect(repos.count == 12)
+            withExtendedLifetime(keep) {}
+        }
+
+        @Test func resultsLandOnTheRightRepositories() async {
+            let fixture = RemoteFixture()
+            let (monitor, repos, keep) = manyRepos(fixture, 6)
+            let more = keep as! [(repo: TestRepo, remote: TestRemote, seed: TestRepo)]
+            for index in [1, 4] {
+                more[index].seed.write("later.txt", "later\n")
+                more[index].seed.commitAll("later")
+                more[index].seed.git("push", "--quiet")
+            }
+            monitor.refresh()
+            #expect(await waitUntil { !monitor.isRunning && fixture.remoteCalls == 7 })
+            for (index, repo) in repos.enumerated() {
+                // repos[0] is the fixture's own; repos[i] is more[i - 1].
+                let moved = index == 2 || index == 5
+                #expect((monitor.sync(for: repo)?.pull ?? false) == moved, "repository \(index)")
+            }
+        }
+
+        @Test func stoppingKillsEveryCallInFlightAtOnce() async {
+            let fixture = RemoteFixture(hangs: true)
+            var monitor: RemoteMonitor? = nil
+            let (made, _, keep) = manyRepos(fixture, 7)
+            monitor = made
+            monitor?.refresh()
+            #expect(await waitUntil { fixture.hungPids.count == RemoteMonitor.maxCallsAtOnce })
+            #expect(fixture.hungPids.allSatisfy { kill($0, 0) == 0 })
+
+            let start = ContinuousClock.now
+            monitor?.stop()
+            #expect(await eventually(timeout: .seconds(5)) { !fixture.hungProcessExists })
+            #expect(ContinuousClock.now - start < .seconds(5))
+            try? await Task.sleep(for: .milliseconds(300))
+            #expect(fixture.hungPids.count == RemoteMonitor.maxCallsAtOnce, "no further call was started after stopping")
+            monitor = nil
+            withExtendedLifetime(keep) {}
+        }
+
+        @Test func aRefreshDuringARunWithManyRepositoriesQueuesOneMoreRunOnly() async {
+            let fixture = RemoteFixture(lsRemote: "sleep 0.3")
+            let (monitor, _, keep) = manyRepos(fixture, 5)
+            monitor.refresh()
+            #expect(await waitUntil { monitor.isRunning })
+            monitor.refresh()
+            monitor.refresh()
+            #expect(await waitUntil(timeout: .seconds(30)) { fixture.remoteCalls == 12 && !monitor.isRunning })
+            try? await Task.sleep(for: .milliseconds(300))
+            #expect(fixture.remoteCalls == 12, "two runs of six")
+            #expect(fixture.mostRemoteCallsAtOnce <= RemoteMonitor.maxCallsAtOnce)
+            withExtendedLifetime(keep) {}
+        }
+
+        @Test func theFailureWaitIsPerRepositoryWhileTheOthersAreStillAsked() async {
+            let fixture = RemoteFixture()
+            let more = fixture.moreRepos(2)
+            more[0].repo.git("remote", "set-url", "origin", more[0].repo.path + "/gone")
+            let repos = [fixture.snapshot(), fixture.snapshot(of: more[0].repo), fixture.snapshot(of: more[1].repo)]
+            let monitor = fixture.makeMonitor()
+            monitor.enable()
+            monitor.update(repos: repos)
+            let broken = more[0].repo.path
+            for round in 1...3 {
+                fixture.clock.advance(minutes: 6)
+                monitor.windowBecameKey()
+                #expect(await waitUntil { fixture.remoteCalls(in: fixture.repo.path) == round && !monitor.isRunning })
+            }
+            // Two failures in a row start the wait: the broken one was asked twice, the others three times.
+            #expect(fixture.remoteCalls(in: broken) == 2)
+            #expect(fixture.remoteCalls(in: more[1].repo.path) == 3)
+            withExtendedLifetime(more) {}
         }
 
         // MARK: Stopping

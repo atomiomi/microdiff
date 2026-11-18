@@ -99,6 +99,7 @@ final class RootView: NSView {
     private let sidebarLine = FillView(Theme.line)
 
     static let sidebarWidthKey = "sidebarWidth"
+    static let sidebarHiddenKey = "sidebarHidden"
 
     var title: String {
         get { titleLabel.text }
@@ -138,11 +139,16 @@ final class RootView: NSView {
     }
 
     private(set) var sidebarWidth: CGFloat
+    private(set) var sidebarHidden: Bool
+    /// Where "sidebar hidden" is remembered. Nil: neither read nor written (snapshots, benchmarks, soaks).
+    private let defaults: UserDefaults?
 
-    override init(frame frameRect: NSRect) {
+    init(defaults: UserDefaults? = .standard) {
         let saved = UserDefaults.standard.double(forKey: Self.sidebarWidthKey)
         sidebarWidth = saved >= 160 ? CGFloat(saved) : Theme.defaultSidebarWidth
-        super.init(frame: frameRect)
+        sidebarHidden = defaults?.bool(forKey: Self.sidebarHiddenKey) ?? false
+        self.defaults = defaults
+        super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = Theme.background
         messageLabel.isHidden = true
@@ -150,6 +156,21 @@ final class RootView: NSView {
             addSubview(view)
         }
         resizeHandle.onDrag = { [weak self] x in self?.setSidebarWidth(x) }
+        for view in sidebarViews { view.isHidden = sidebarHidden }
+    }
+
+    private var sidebarViews: [NSView] { [sidebarTabs, tree, resizeHandle, sidebarLine] }
+
+    /// The view that takes the keyboard when the sidebar goes away.
+    var mainResponder: NSView { showsEditor ? editor?.textView ?? codeView : codeView }
+
+    func setSidebarHidden(_ hidden: Bool) {
+        guard hidden != sidebarHidden else { return }
+        sidebarHidden = hidden
+        defaults?.set(hidden, forKey: Self.sidebarHiddenKey)
+        for view in sidebarViews { view.isHidden = hidden }
+        needsLayout = true
+        layoutSubtreeIfNeeded()
     }
 
     @available(*, unavailable)
@@ -208,19 +229,21 @@ final class RootView: NSView {
         let titleHeight = titleBarHeight
         let top = titleHeight + 1
         let height = max(0, bounds.height - top)
-        let sidebar = min(sidebarWidth, max(160, bounds.width - 240))
-        let mainX = sidebar + 1
+        let sidebar = sidebarHidden ? 0 : min(sidebarWidth, max(160, bounds.width - 240))
+        let mainX = sidebarHidden ? 0 : sidebar + 1
         let mainWidth = max(0, bounds.width - mainX)
         let codeFrame = CGRect(x: mainX, y: top + Theme.tabBarHeight, width: mainWidth, height: max(0, height - Theme.tabBarHeight))
 
-        sidebarTabs.frame = CGRect(x: 0, y: top, width: sidebar, height: Theme.tabBarHeight)
-        tree.frame = CGRect(x: 0, y: top + Theme.tabBarHeight, width: sidebar, height: max(0, height - Theme.tabBarHeight))
+        if !sidebarHidden {
+            sidebarTabs.frame = CGRect(x: 0, y: top, width: sidebar, height: Theme.tabBarHeight)
+            tree.frame = CGRect(x: 0, y: top + Theme.tabBarHeight, width: sidebar, height: max(0, height - Theme.tabBarHeight))
+            resizeHandle.frame = CGRect(x: sidebar - 2, y: top, width: 5, height: height)
+            sidebarLine.frame = CGRect(x: sidebar, y: top, width: 1, height: height)
+        }
         tabBar.frame = CGRect(x: mainX, y: top, width: mainWidth, height: Theme.tabBarHeight)
         codeView.frame = codeFrame
         editor?.frame = codeFrame
-        resizeHandle.frame = CGRect(x: sidebar - 2, y: top, width: 5, height: height)
         titleLine.frame = CGRect(x: 0, y: titleHeight, width: bounds.width, height: 1)
-        sidebarLine.frame = CGRect(x: sidebar, y: top, width: 1, height: height)
 
         let titleWidth = min(titleLabel.fittingWidth, max(0, bounds.width - 160))
         titleLabel.frame = CGRect(x: ((bounds.width - titleWidth) / 2).rounded(), y: 0, width: titleWidth, height: titleHeight)
@@ -234,7 +257,7 @@ final class RootView: NSView {
 /// Owns the window and connects the views to the workspace state.
 final class MainWindowController: NSObject, NSWindowDelegate {
     let window: NSWindow
-    private let root = RootView()
+    private let root: RootView
     private(set) var workspace: Workspace
     private var sidebarScroll: [SidebarTab: CGPoint] = [:]
     /// Called once, after the first scan result is on screen.
@@ -252,7 +275,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     /// Live windows ask the remotes where their branches are; snapshots, benchmarks and soaks never do.
     private var checksRemotes = false
 
-    init(path: String, remote: RemoteMonitor = RemoteMonitor()) {
+    init(path: String, remote: RemoteMonitor = RemoteMonitor(), defaults: UserDefaults? = .standard) {
+        root = RootView(defaults: defaults)
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1180, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -352,7 +376,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
         // Arrow keys work in the list right away.
-        window.makeFirstResponder(root.tree)
+        window.makeFirstResponder(root.sidebarHidden ? root.mainResponder : root.tree)
     }
 
     // MARK: - Workspace -> views
@@ -543,8 +567,24 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    @objc func showChanges(_ sender: Any?) { selectSidebarTab(.changes) }
-    @objc func showFiles(_ sender: Any?) { selectSidebarTab(.files) }
+    @objc func showChanges(_ sender: Any?) { showSidebar(.changes) }
+    @objc func showFiles(_ sender: Any?) { showSidebar(.files) }
+
+    private func showSidebar(_ tab: SidebarTab) {
+        root.setSidebarHidden(false)
+        selectSidebarTab(tab)
+    }
+
+    var sidebarHidden: Bool { root.sidebarHidden }
+
+    /// `⌘B`. Everything that feeds the sidebar keeps running while it is hidden: only the views go.
+    @objc func toggleSidebar(_ sender: Any?) {
+        let hide = !root.sidebarHidden
+        if hide, let focused = window.firstResponder as? NSView, focused.isDescendant(of: root.tree) {
+            window.makeFirstResponder(root.mainResponder)
+        }
+        root.setSidebarHidden(hide)
+    }
 
     /// `⌘D`, `⌘R`, `⌘E`: straight to a mode (the mode the tab is in already: nothing). A file that cannot be edited
     /// stays as it is, and `edit` is dimmed.
@@ -589,10 +629,12 @@ final class MainWindowController: NSObject, NSWindowDelegate {
 
     /// Loads everything on the calling thread and renders the window content to PNG data.
     func renderSnapshot(
-        size: CGSize, sidebarTab: SidebarTab, open relativePaths: [String], mode: ViewMode?, scroll: CGFloat = 0, sidebarWidth: CGFloat? = nil
+        size: CGSize, sidebarTab: SidebarTab, open relativePaths: [String], mode: ViewMode?, scroll: CGFloat = 0, sidebarWidth: CGFloat? = nil,
+        sidebarHidden: Bool = false
     ) -> Data? {
         window.setContentSize(size)
         root.layoutSubtreeIfNeeded()
+        if sidebarHidden { root.setSidebarHidden(true) }
         if let sidebarWidth { root.setSidebarWidthTemporarily(sidebarWidth) }
         workspace.scanNow()
         for relativePath in relativePaths {

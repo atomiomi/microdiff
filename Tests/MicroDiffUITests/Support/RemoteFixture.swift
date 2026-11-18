@@ -34,7 +34,7 @@ final class RemoteFixture {
         let folder = folder
         log = folder.path + "/calls"
         remoteLog = folder.path + "/remote"
-        let body = hangs ? "sleep 60 &\necho $! > '\(folder.path)/pid'\nwait" : lsRemote
+        let body = hangs ? "sleep 60 &\necho $! >> '\(folder.path)/pid'\nwait" : lsRemote
         git = FakeGit.wrapping(logTo: log, lsRemote: "echo start >> '\(remoteLog)'\n\(body)\necho end >> '\(remoteLog)'")
     }
 
@@ -91,13 +91,34 @@ final class RemoteFixture {
         await waitUntil { !monitor.isRunning }
     }
 
-    /// Pid of the `sleep` a hanging `git ls-remote` started, once it did.
-    var hungPid: Int32? {
-        fileText(folder.path + "/pid").flatMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    /// Pids of the `sleep`s that hanging `git ls-remote` calls started so far.
+    var hungPids: [Int32] {
+        (fileText(folder.path + "/pid") ?? "").split(separator: "\n").compactMap { Int32($0) }
     }
 
-    /// Whether that process still exists.
+    var hungPid: Int32? { hungPids.first }
+
+    /// Whether any of those processes still exists.
     var hungProcessExists: Bool {
-        hungPid.map { kill($0, 0) == 0 } ?? false
+        hungPids.contains { kill($0, 0) == 0 }
+    }
+
+    /// Calls to the remote made in the repository at `path`.
+    func remoteCalls(in path: String) -> Int {
+        lines(log).filter { $0.contains(" ls-remote ") && $0.contains("-C \(path) ") }.count
+    }
+
+    /// `count` more clones, each of a remote of its own, following `origin/main`. Keep the result alive.
+    func moreRepos(_ count: Int) -> [(repo: TestRepo, remote: TestRemote, seed: TestRepo)] {
+        (0..<count).map { _ in
+            let remote = TestRemote()
+            let seed = remote.clone()
+            let repo = TestRepo(cloning: remote.path)
+            return (repo, remote, seed)
+        }
+    }
+
+    func snapshot(of repo: TestRepo) -> RepoSnapshot {
+        RepoScanner().scan(root: repo.path).repos[0]
     }
 }

@@ -44,6 +44,34 @@ extension PerfSuite {
             #expect(report("repo-scan-nested-repo-500-files-40-changes", m, budgetMs: 80))
         }
 
+        /// 30 clean submodules where nothing moves: after the first scan they cost a few `stat` calls each, no process.
+        /// The budget is mostly git's own: `git status --ignore-submodules=none` looks into every submodule (about 7 ms each).
+        @Test func repoScanWithManyCleanSubmodules() {
+            let root = Fixtures.submoduleRepo.path
+            let scanner = RepoScanner()
+            let snapshot = scanner.scan(root: root)
+            #expect(snapshot.repos.count == 1 && snapshot.quietRepos.count == 30)
+            #expect(snapshot.quietRepos.allSatisfy { $0.isSubmodule && $0.upstream == "origin/main" })
+            let m = measure(iterations: 7) { blackHole(scanner.scan(root: root)) }
+            #expect(report("repo-scan-30-clean-submodules-warm", m, budgetMs: 300))
+
+            // What git itself needs for the same repository (the parent's status with every submodule looked into, and
+            // `.gitmodules`): the scan may add very little to it.
+            let git = scanner.git
+            let own = measure(iterations: 7) {
+                blackHole(scanner.readStatus(in: root))
+                blackHole(try? git.run(["config", "--file", ".gitmodules", "-z", "--get-regexp", "path"], in: root, allowedExitCodes: [0, 1]))
+            }
+            #expect(report("repo-scan-30-clean-submodules-git-only", own, budgetMs: 300))
+            #expect(m.median < own.median * 1.25 + 5, "the quiet submodules add little to what git costs anyway")
+
+            let plain = RepoScanner()
+            let plainRoot = Fixtures.plainRepo.path
+            #expect(plain.scan(root: plainRoot).quietRepos.isEmpty)
+            let base = measure(iterations: 7) { blackHole(plain.scan(root: plainRoot)) }
+            #expect(report("repo-scan-200-files-no-submodules", base, budgetMs: 80))
+        }
+
         @Test func repoScanWithIgnoredFolder() throws {
             let root = Fixtures.ignoredRepo.path
             let scanner = RepoScanner()

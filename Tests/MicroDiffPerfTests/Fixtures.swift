@@ -92,6 +92,31 @@ enum Fixtures {
         return repo
     }()
 
+    /// 200 tracked files and 30 clean submodules on `main` following `origin/main`.
+    static let submoduleRepo: TestRepo = {
+        let source = TestRepo()
+        source.write("lib.txt", "library\n")
+        source.commitAll("library")
+        let repo = TestRepo()
+        for k in 0..<200 { repo.write("src/f\(k).ts", "export const a\(k) = \(k)\n") }
+        repo.commitAll("initial")
+        for k in 0..<30 { repo.addSubmodule(from: source, at: "vendor/lib\(k)") }
+        repo.commitAll("submodules")
+        keepAlive.append(source)
+        return repo
+    }()
+
+    /// The same 200 files and nothing else.
+    static let plainRepo: TestRepo = {
+        let repo = TestRepo()
+        for k in 0..<200 { repo.write("src/f\(k).ts", "export const a\(k) = \(k)\n") }
+        repo.commitAll("initial")
+        return repo
+    }()
+
+    /// The submodules were cloned from this (their `origin`): it must outlive them.
+    nonisolated(unsafe) private static var keepAlive: [TestRepo] = []
+
     private static let bigFileDir = TempDir(prefix: "perf-bigfile")
 
     /// A 10 MB text file.

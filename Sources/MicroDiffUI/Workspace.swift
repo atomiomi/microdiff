@@ -210,9 +210,7 @@ final class Workspace {
         var rows: [TreeRow]
         switch sidebarTab {
         case .changes:
-            // A quiet nested repository is listed (as a header) while it has something to pull or push.
-            let listed = Set(snapshot.quietRepos.filter { remote.sync(for: $0) != nil }.map(\.rootPath))
-            rows = changesTree?.rows(collapsed: collapsed, listedQuiet: listed) ?? []
+            rows = changesTree?.rows(collapsed: collapsed, listedQuiet: listedQuietRepos(snapshot)) ?? []
         case .files: rows = fileTree.rows(snapshot: snapshot)
         }
         let syncs = snapshot.allRepos.map(remote.sync(for:))
@@ -223,11 +221,17 @@ final class Workspace {
         return rows
     }
 
-    /// One quiet line for the empty states of the changes tab.
+    /// A repository without changes of its own is listed (as a header) while it has something to pull or push.
+    private func listedQuietRepos(_ snapshot: WorkspaceSnapshot) -> Set<String> {
+        Set(snapshot.quietRepos.filter { remote.sync(for: $0) != nil }.map(\.rootPath))
+    }
+
+    /// One quiet line for the empty states of the changes tab. "no changes" only when nothing but the main
+    /// repository's row is listed: under rows of repositories to pull or push it would float in the empty space.
     var sidebarEmptyMessage: String? {
         guard sidebarTab == .changes, let snapshot else { return nil }
         if !snapshot.isGitRepo { return "not a git repository" }
-        return snapshot.totalChangeCount == 0 ? "no changes" : nil
+        return snapshot.totalChangeCount == 0 && listedQuietRepos(snapshot).isEmpty ? "no changes" : nil
     }
 
     /// The sidebar row of the active tab's file, in the current sidebar tab.

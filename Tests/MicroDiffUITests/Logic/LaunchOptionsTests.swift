@@ -50,6 +50,17 @@ extension UITests {
             #expect(parse(["--sidebar", "160.5"]).snapshotSidebarWidth == 160.5)
         }
 
+        @Test func sidebarHiddenIsAWordNotAWidthAndKeepsThePath() {
+            #expect(!parse([]).snapshotSidebarHidden)
+            let options = parse(["--sidebar", "hidden", "--snapshot", "out.png", "/repo"])
+            #expect(options.snapshotSidebarHidden)
+            #expect(options.snapshotSidebarWidth == nil)
+            #expect(options.snapshotPath == "out.png")
+            #expect(options.path == "/repo")
+            #expect(!parse(["--sidebar", "220"]).snapshotSidebarHidden)
+            #expect(parse(["/repo", "--sidebar", "hidden"]).path == "/repo")
+        }
+
         @Test func sidebarWithoutAUsableWidthIsIgnoredAndKeepsThePath() {
             #expect(parse(["--sidebar"]).snapshotSidebarWidth == nil)
             #expect(parse(["--sidebar", "wide"]).snapshotSidebarWidth == nil)

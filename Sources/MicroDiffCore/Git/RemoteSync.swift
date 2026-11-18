@@ -202,7 +202,7 @@ package struct RemoteChecker: Sendable {
         }
     }
 
-    private static func isCommitID(_ text: String) -> Bool {
+    static func isCommitID(_ text: String) -> Bool {
         (text.count == 40 || text.count == 64) && text.allSatisfy(\.isHexDigit)
     }
 }
