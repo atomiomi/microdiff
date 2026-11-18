@@ -1,0 +1,46 @@
+#!/bin/bash
+# Opens a folder (or a file inside one) in MicroDiff.
+#
+#   microdiff                  the current folder
+#   microdiff path/to/repo     that folder
+#   microdiff src/app.rs       the file's repository, with the file open in a tab
+#
+# All windows live in one running app (one Dock icon). When it is running, the folder opens as a new window
+# there, or its window comes to the front if it is already open. Returns right away.
+# To have it on your PATH:  ln -s "$PWD/scripts/microdiff" ~/.local/bin/microdiff
+set -euo pipefail
+
+TARGET="${1:-.}"
+FILE=""
+if [[ -f "$TARGET" ]]; then
+  FILE="$(cd "$(dirname "$TARGET")" && pwd -P)/$(basename "$TARGET")"
+  TARGET="$(dirname "$FILE")"
+elif [[ -d "$TARGET" ]]; then
+  TARGET="$(cd "$TARGET" && pwd -P)"
+else
+  echo "microdiff: no such file or folder: $TARGET" >&2
+  exit 1
+fi
+
+# This script is usually reached through a link on the PATH: find where it really lives.
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+ROOT="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+
+BIN="$ROOT/build/MicroDiff.app/Contents/MacOS/MicroDiff"
+if [[ ! -x "$BIN" ]]; then
+  echo "microdiff: the app is not built yet. Run: $ROOT/scripts/build-app.sh" >&2
+  exit 1
+fi
+
+# Started directly (not through `open`): faster, and detached so closing the terminal does not close the window.
+# When the app is already running, this process hands it the folder over a socket and exits within milliseconds.
+if [[ -n "$FILE" ]]; then
+  nohup "$BIN" "$TARGET" --open "$FILE" >/dev/null 2>&1 &
+else
+  nohup "$BIN" "$TARGET" >/dev/null 2>&1 &
+fi

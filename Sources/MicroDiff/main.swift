@@ -1,0 +1,3 @@
+import MicroDiffUI
+
+MicroDiffApp.main()
