@@ -12,11 +12,25 @@ enum SaveAnswer {
     case save, dontSave, cancel
 }
 
+/// What the app asks before moving a file or folder to the Trash.
+struct TrashQuestion: Equatable {
+    var name: String
+    var isFolder: Bool
+
+    var message: String {
+        isFolder ? "Move “\(name)” and everything in it to the Trash?" : "Move “\(name)” to the Trash?"
+    }
+}
+
 /// The dialogs, behind a seam: the app shows alert sheets, tests answer with closures and never see a dialog.
 struct Prompts {
     /// Asks a question about unsaved edits; `answer` is called once, later.
     var ask: (_ question: SaveQuestion, _ window: NSWindow, _ answer: @escaping (SaveAnswer) -> Void) -> Void
-    /// Tells the user something went wrong (a save failed).
+    /// Asks whether to move an item to the Trash; `answer` is called once, later, with true for "Move to Trash".
+    var confirmTrash: (_ question: TrashQuestion, _ window: NSWindow, _ answer: @escaping (Bool) -> Void) -> Void
+    /// Asks for a file name; `answer` is called once, later, with the text typed, or nil for Cancel.
+    var askName: (_ message: String, _ window: NSWindow, _ answer: @escaping (String?) -> Void) -> Void
+    /// Tells the user something went wrong (a save or a move to the Trash failed).
     var tell: (_ message: String, _ window: NSWindow) -> Void
 
     /// Standard alerts, as sheets on the window.
@@ -44,6 +58,24 @@ struct Prompts {
                 default: answer(.cancel)
                 }
             }
+        },
+        confirmTrash: { question, window, answer in
+            let alert = NSAlert()
+            alert.messageText = question.message
+            alert.informativeText = "You can put it back from the Trash."
+            alert.addButton(withTitle: "Move to Trash")
+            alert.addButton(withTitle: "Cancel").keyEquivalent = "\u{1b}"
+            alert.beginSheetModal(for: window) { answer($0 == .alertFirstButtonReturn) }
+        },
+        askName: { message, window, answer in
+            let alert = NSAlert()
+            alert.messageText = message
+            let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+            alert.accessoryView = field
+            alert.addButton(withTitle: "Create")
+            alert.addButton(withTitle: "Cancel").keyEquivalent = "\u{1b}"
+            alert.window.initialFirstResponder = field
+            alert.beginSheetModal(for: window) { answer($0 == .alertFirstButtonReturn ? field.stringValue : nil) }
         },
         tell: { message, window in
             let alert = NSAlert()

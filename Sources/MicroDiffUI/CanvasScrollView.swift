@@ -94,7 +94,16 @@ class CanvasScrollView: NSView {
             owner?.toolTip(atCanvasPoint: point) ?? ""
         }
 
-        override func mouseDown(with event: NSEvent) { owner?.forward(.down, event) }
+        override func mouseDown(with event: NSEvent) {
+            // A control-click is a right click.
+            if event.modifierFlags.contains(.control), let menu = menu(for: event) {
+                NSMenu.popUpContextMenu(menu, with: event, for: self)
+                return
+            }
+            owner?.forward(.down, event)
+        }
+
+        override func menu(for event: NSEvent) -> NSMenu? { owner?.menu(atCanvasPoint: convert(event.locationInWindow, from: nil)) }
         override func mouseDragged(with event: NSEvent) { owner?.forward(.dragged, event) }
         override func mouseUp(with event: NSEvent) { owner?.forward(.up, event) }
 
@@ -270,6 +279,15 @@ class CanvasScrollView: NSView {
     func toolTip(atCanvasPoint point: CGPoint) -> String? {
         let visible = visibleContentRect
         return toolTip(at: CGPoint(x: point.x + visible.minX, y: point.y + visible.minY))
+    }
+
+    /// The context menu for a point in content coordinates, nil for none.
+    func menu(at point: CGPoint) -> NSMenu? { nil }
+
+    /// `menu(at:)` for a point in the canvas's own coordinates.
+    func menu(atCanvasPoint point: CGPoint) -> NSMenu? {
+        let visible = visibleContentRect
+        return menu(at: CGPoint(x: point.x + visible.minX, y: point.y + visible.minY))
     }
 
     /// `point` is in content coordinates.

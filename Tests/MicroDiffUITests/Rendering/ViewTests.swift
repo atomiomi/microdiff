@@ -91,11 +91,14 @@ extension UITests {
             #expect(bitmap.isUniform(background, in: margin))
         }
 
-        @Test func selectingTheRepoRowDoesNotPaintIt() {
-            let rows = [repoRow(), fileRow("f")]
+        @Test func selectedRepoAndFolderRowsAreAlsoPainted() {
+            let rows = [repoRow(), dirRow("src"), fileRow("f")]
             let view = tree(rows)
+            let selected = RGB.composite(Theme.rowSelected, over: Theme.background)
             view.selectedID = rows[0].id
-            #expect(Render.canvas(view).isUniform(background, in: PixelRegion(x: 0, y: 0, width: 10, height: 300)))
+            #expect(Render.canvas(view).isUniform(selected, in: PixelRegion(x: 0, y: 8, width: 10, height: 28)))
+            view.selectedID = rows[1].id
+            #expect(Render.canvas(view).isUniform(selected, in: PixelRegion(x: 0, y: rowTopBelowRoot(1), width: 10, height: 24)))
         }
 
         @Test func repoRowIsABandInTheChangesStyleOnly() {
@@ -206,7 +209,7 @@ extension UITests {
             view.mouse(.down, at: CGPoint(x: 50, y: CGFloat(rowTop(1) + 10)), event: Event.mouse())
             #expect(toggled == [rows[0].id, rows[1].id])
             #expect(opened == 0)
-            #expect(view.selectedID == nil)
+            #expect(view.selectedID == rows[1].id, "a click selects any row")
         }
 
         @Test func clickingBelowTheRowsDoesNothing() {
@@ -219,31 +222,109 @@ extension UITests {
             #expect(calls == 0)
         }
 
-        @Test func downArrowSelectsTheNextFileSkippingFoldersAsAPreview() {
+        @Test func downArrowMovesThroughEveryRowAndOnlyFilesOpenAsAPreview() {
             let rows = [repoRow(), dirRow("src"), fileRow("a.txt"), dirRow("lib"), fileRow("b.txt")]
             let view = tree(rows)
             var opened: [(String, Bool)] = []
+            var selected: [String] = []
             view.onOpen = { opened.append(($0.id, $1)) }
+            view.onSelect = { selected.append($0.id) }
 
-            view.keyDown(with: Event.key(125))
-            #expect(view.selectedID == rows[2].id)
+            for index in 0..<5 {
+                view.keyDown(with: Event.key(125))
+                #expect(view.selectedID == rows[index].id)
+            }
             view.keyDown(with: Event.key(125))
             #expect(view.selectedID == rows[4].id)
-            view.keyDown(with: Event.key(125))
-            #expect(view.selectedID == rows[4].id)
+            #expect(selected == [rows[0].id, rows[1].id, rows[3].id])
             #expect(opened.map(\.0) == [rows[2].id, rows[4].id])
             #expect(opened.allSatisfy { !$0.1 })
         }
 
-        @Test func upArrowMovesBackAndStartsAtTheLastFile() {
+        @Test func upArrowMovesBackAndStartsAtTheLastRow() {
             let rows = [repoRow(), fileRow("a.txt"), dirRow("lib"), fileRow("b.txt")]
             let view = tree(rows)
             view.keyDown(with: Event.key(126))
             #expect(view.selectedID == rows[3].id)
             view.keyDown(with: Event.key(126))
-            #expect(view.selectedID == rows[1].id)
+            #expect(view.selectedID == rows[2].id)
             view.keyDown(with: Event.key(126))
+            view.keyDown(with: Event.key(126))
+            #expect(view.selectedID == rows[0].id)
+        }
+
+        private func nestedRows() -> [TreeRow] {
+            let closed = TreeRow(
+                id: TreeRow.makeID(repoIndex: 0, kind: .directory, path: "src/ui"), kind: .directory, depth: 2, name: "ui",
+                path: "src/ui", repoIndex: 0)
+            var src = dirRow("src")
+            src.isExpanded = true
+            return [repoRow(), src, closed, fileRow("a.txt", depth: 2), fileRow("top.txt")]
+        }
+
+        @Test func leftClosesAnOpenFolderThenMovesToTheParentRow() {
+            let rows = nestedRows()
+            let view = tree(rows)
+            var toggled: [String] = []
+            var selected: [String] = []
+            view.onToggle = { toggled.append($0.id) }
+            view.onSelect = { selected.append($0.id) }
+            view.selectedID = rows[1].id
+            view.keyDown(with: Event.key(123))
+            #expect(toggled == [rows[1].id])
+            view.selectedID = rows[2].id
+            view.keyDown(with: Event.key(123))
+            #expect(selected == [rows[1].id], "a closed folder goes to its parent")
             #expect(view.selectedID == rows[1].id)
+        }
+
+        @Test func leftOnAFileGoesToItsFolderAndAtTheTopLevelNothingHappens() {
+            let rows = nestedRows()
+            let view = tree(rows)
+            var calls = 0
+            view.onToggle = { _ in calls += 1 }
+            view.selectedID = rows[3].id
+            view.keyDown(with: Event.key(123))
+            #expect(view.selectedID == rows[1].id, "the nearest row above that is less deep")
+            view.selectedID = rows[4].id
+            view.keyDown(with: Event.key(123))
+            #expect(view.selectedID == rows[0].id)
+            var closedRoot = repoRow()
+            closedRoot.isExpanded = false
+            let top = tree([closedRoot])
+            top.selectedID = closedRoot.id
+            top.keyDown(with: Event.key(123))
+            #expect(top.selectedID == closedRoot.id)
+            #expect(calls == 0)
+        }
+
+        @Test func rightOpensAClosedFolderThenMovesToTheFirstChild() {
+            let rows = nestedRows()
+            let view = tree(rows)
+            var toggled: [String] = []
+            var opened: [String] = []
+            view.onToggle = { toggled.append($0.id) }
+            view.onOpen = { row, _ in opened.append(row.id) }
+            view.selectedID = rows[2].id
+            view.keyDown(with: Event.key(124))
+            #expect(toggled == [rows[2].id])
+            view.selectedID = rows[1].id
+            view.keyDown(with: Event.key(124))
+            #expect(view.selectedID == rows[2].id, "an open folder goes to its first child")
+            view.selectedID = rows[3].id
+            view.keyDown(with: Event.key(124))
+            #expect(view.selectedID == rows[3].id, "a file has nothing to open")
+            #expect(opened.isEmpty)
+        }
+
+        @Test func returnOnAFolderOpensOrClosesIt() {
+            let rows = nestedRows()
+            let view = tree(rows)
+            var toggled: [String] = []
+            view.onToggle = { toggled.append($0.id) }
+            view.selectedID = rows[1].id
+            view.keyDown(with: Event.key(36))
+            #expect(toggled == [rows[1].id])
         }
 
         @Test func returnPinsTheSelectedFileAndDoesNothingWithoutSelection() {

@@ -6,16 +6,23 @@ import MicroDiffTestSupport
 
 // Helpers for the edit-mode tests. No `import Testing` here (it cannot be combined with Foundation in one file).
 
-/// Answers the save questions in place of a dialog and records what was asked and told.
+/// Answers the questions in place of a dialog and records what was asked and told.
 @MainActor
 final class FakePrompts {
     /// Answers handed out in order; once used up, every question is answered with Cancel.
     var answers: [SaveAnswer]
+    /// Answers to "move to the Trash?" and to "which name?", handed out in order; once used up: Cancel.
+    var trashAnswers: [Bool]
+    var names: [String?]
     private(set) var questions: [SaveQuestion] = []
+    private(set) var trashQuestions: [TrashQuestion] = []
+    private(set) var nameQuestions: [String] = []
     private(set) var messages: [String] = []
 
-    init(_ answers: [SaveAnswer] = []) {
+    init(_ answers: [SaveAnswer] = [], trash: [Bool] = [], names: [String?] = []) {
         self.answers = answers
+        trashAnswers = trash
+        self.names = names
     }
 
     /// Holds on to this object: a test can hand it over without keeping it.
@@ -24,6 +31,14 @@ final class FakePrompts {
             ask: { question, _, answer in
                 self.questions.append(question)
                 answer(self.answers.isEmpty ? .cancel : self.answers.removeFirst())
+            },
+            confirmTrash: { question, _, answer in
+                self.trashQuestions.append(question)
+                answer(self.trashAnswers.isEmpty ? false : self.trashAnswers.removeFirst())
+            },
+            askName: { message, _, answer in
+                self.nameQuestions.append(message)
+                answer(self.names.isEmpty ? nil : self.names.removeFirst())
             },
             tell: { message, _ in self.messages.append(message) })
     }
@@ -121,6 +136,15 @@ extension MainWindowController {
 /// The text of a file on disk.
 func fileText(_ path: String) -> String? {
     try? String(contentsOfFile: path, encoding: .utf8)
+}
+
+func exists(_ path: String) -> Bool {
+    (try? FileManager.default.attributesOfItem(atPath: path)) != nil
+}
+
+/// The names in a folder, sorted.
+func entries(_ path: String) -> [String] {
+    ((try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []).sorted()
 }
 
 func fileBytes(_ path: String) -> [UInt8]? {
