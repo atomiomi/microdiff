@@ -11,10 +11,10 @@ enum Event {
             eventNumber: 0, clickCount: clicks, pressure: 1)!
     }
 
-    static func key(_ keyCode: UInt16) -> NSEvent {
+    static func key(_ keyCode: UInt16, characters: String = "", modifiers: NSEvent.ModifierFlags = []) -> NSEvent {
         NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
-            characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: keyCode)!
+            with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0, windowNumber: 0, context: nil,
+            characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode)!
     }
 
     /// A middle-button press. Built from a CGEvent, because NSEvent cannot set the button number.

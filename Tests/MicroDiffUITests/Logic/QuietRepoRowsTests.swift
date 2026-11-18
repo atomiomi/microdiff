@@ -162,11 +162,13 @@ extension UITests {
             let header = before[2]
             workspace.toggle(header)
             workspace.toggle(header)
-            #expect(refreshes == 0)
+            // It is only selected: nothing folds, and the sidebar is told once per click.
+            #expect(refreshes == 2)
             #expect(rows(workspace) == before)
+            #expect(workspace.selectedRowID == header.id)
             // A section header still folds.
             workspace.toggle(before[0])
-            #expect(refreshes == 1)
+            #expect(refreshes == 3)
             #expect(rows(workspace).map(\.kind) == [.repo, .repo])
         }
 

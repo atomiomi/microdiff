@@ -213,6 +213,7 @@ final class Workspace {
             rows = changesTree?.rows(collapsed: collapsed, listedQuiet: listedQuietRepos(snapshot)) ?? []
         case .files: rows = fileTree.rows(snapshot: snapshot)
         }
+        if let chosen = chosenRowID, !rows.contains(where: { $0.id == chosen }) { chosenRowID = nil }
         let syncs = snapshot.allRepos.map(remote.sync(for:))
         guard syncs.contains(where: { $0 != nil }) else { return rows }
         for index in rows.indices where rows[index].kind == .repo && syncs.indices.contains(rows[index].repoIndex) {
@@ -234,8 +235,21 @@ final class Workspace {
         return snapshot.totalChangeCount == 0 && listedQuietRepos(snapshot).isEmpty ? "no changes" : nil
     }
 
+    /// The row the tree selected by itself (a folder or repository row, or a row reached with the arrow keys).
+    /// Nil: the selection is the open file's row. Dropped whenever the open tab changes for another reason, and by
+    /// `sidebarRows()` once its row is gone.
+    private var chosenRowID: String?
+
+    /// The selected sidebar row in the current sidebar tab.
+    var selectedRowID: String? { chosenRowID ?? openFileRowID }
+
+    func select(_ row: TreeRow) {
+        chosenRowID = row.id
+        onSidebarChanged?()
+    }
+
     /// The sidebar row of the active tab's file, in the current sidebar tab.
-    var selectedRowID: String? {
+    private var openFileRowID: String? {
         guard let activeTab else { return nil }
         let tab = tabs[activeTab]
         switch sidebarTab {
@@ -251,11 +265,77 @@ final class Workspace {
         absolute.hasPrefix(rootPath + "/") ? String(absolute.dropFirst(rootPath.count + 1)) : nil
     }
 
+    /// The absolute path a row stands for (a repository row: the repository's folder). Nil when it has none.
+    func absolutePath(of row: TreeRow) -> String? {
+        var base = rootPath
+        if sidebarTab == .changes {
+            guard let snapshot, snapshot.allRepos.indices.contains(row.repoIndex) else { return nil }
+            base = snapshot.allRepos[row.repoIndex].rootPath
+        }
+        return row.path.isEmpty ? base : base + "/" + row.path
+    }
+
+    /// The items of a row's context menu; none when the row stands for no path.
+    func menuEntries(for row: TreeRow) -> [RowMenuEntry] {
+        guard let path = absolutePath(of: row) else { return [] }
+        // Not following links: a link to nothing is still an item.
+        let exists = (try? FileManager.default.attributesOfItem(atPath: path)) != nil
+        var entries: [RowMenuEntry] = [.item(.showInFinder, isEnabled: exists)]
+        guard sidebarTab == .files else { return entries }
+        entries.insert(.item(.newFile, isEnabled: exists), at: 0)
+        if isInsideRoot(path) { entries += [.separator, .item(.moveToTrash, isEnabled: exists)] }
+        return entries
+    }
+
+    /// Only things inside the opened folder may be trashed or made, never the folder itself. The folder an item lies in is
+    /// compared with links resolved; the item itself is not resolved, since a link is trashed as the link.
+    func isInsideRoot(_ path: String) -> Bool {
+        let parent = URL(fileURLWithPath: path, isDirectory: false).standardizedFileURL
+            .deletingLastPathComponent().resolvingSymlinksInPath().path
+        let root = URL(fileURLWithPath: rootPath).resolvingSymlinksInPath().path
+        return parent == root || parent.hasPrefix(root + "/")
+    }
+
+    /// Makes an empty file named `name` (folders in it are made too) in `folder`, shows its row selected in the files
+    /// tab and opens it in a kept tab in edit mode. Never touches a file that exists.
+    func createFile(named name: String, in folder: String) throws(NewFileError) {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if name.isEmpty { throw NewFileError(message: "Enter a file name.") }
+        if name.hasSuffix("/") { throw NewFileError(message: "A file name cannot end in “/”.") }
+        if name.hasPrefix("/") { throw NewFileError(message: "Use a name relative to the folder.") }
+        let path = URL(fileURLWithPath: folder + "/" + name, isDirectory: false).standardizedFileURL.path
+        guard isInsideRoot(path) else { throw NewFileError(message: "“\(name)” would be outside the opened folder.") }
+        do {
+            try FileManager.default.createDirectory(
+                atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        } catch {
+            throw NewFileError(message: error.localizedDescription)
+        }
+        // Exclusive: a name that exists (a file, a folder, a link) is refused and never overwritten.
+        let descriptor = Darwin.open(path, O_WRONLY | O_CREAT | O_EXCL, 0o644)
+        guard descriptor >= 0 else {
+            throw NewFileError(message: errno == EEXIST ? "“\(name)” already exists." : String(cString: strerror(errno)))
+        }
+        close(descriptor)
+
+        if let relative = relativePath(path) {
+            sidebarTab = .files
+            fileTree.reveal(path: relative)
+        }
+        fileTree.invalidate()
+        openFile(path, mode: .edit, pin: true)
+        refresh()
+    }
+
     func toggle(_ row: TreeRow) {
+        chosenRowID = row.id
         switch sidebarTab {
         case .changes:
             // A header with nothing under it (a quiet nested repository) has nothing to fold, and its row comes and goes.
-            if row.kind == .repo, row.repoIndex >= snapshot?.repos.count ?? 0 { return }
+            if row.kind == .repo, row.repoIndex >= snapshot?.repos.count ?? 0 {
+                onSidebarChanged?()
+                return
+            }
             if collapsed.contains(row.id) { collapsed.remove(row.id) } else { collapsed.insert(row.id) }
         case .files:
             fileTree.setExpanded(!row.isExpanded, path: row.path)
@@ -265,6 +345,7 @@ final class Workspace {
 
     func selectSidebarTab(_ tab: SidebarTab) {
         guard tab != sidebarTab else { return }
+        chosenRowID = nil
         sidebarTab = tab
         if tab == .files, let activeTab, let relative = relativePath(tabs[activeTab].path) {
             // Open the folders above the active file so its row can be shown selected.
@@ -288,6 +369,7 @@ final class Workspace {
 
     /// Opens a file in a tab. `mode` applies to a new tab; `.edit` opens it in the read view and then enters edit mode.
     func openFile(_ path: String, mode: ViewMode, pin: Bool, synchronously: Bool = false) {
+        chosenRowID = nil
         var isNew = false
         if let existing = tabs.firstIndex(where: { $0.path == path }) {
             if pin { tabs[existing].isPreview = false }
@@ -318,6 +400,7 @@ final class Workspace {
 
     func selectTab(_ index: Int) {
         guard tabs.indices.contains(index), index != activeTab else { return }
+        chosenRowID = nil
         activeTab = index
         onTabsChanged?()
         onSidebarChanged?()
@@ -337,6 +420,7 @@ final class Workspace {
     /// Closes a tab. Unsaved edits are thrown away: ask first (the window controller does).
     func closeTab(_ index: Int) {
         guard tabs.indices.contains(index) else { return }
+        chosenRowID = nil
         let shownPath = activeTab.map { tabs[$0].path }
         dropBuffer(tabs[index].path)
         tabs.remove(at: index)

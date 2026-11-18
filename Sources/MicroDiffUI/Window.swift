@@ -272,6 +272,10 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     var onBecomeKey: ((MainWindowController) -> Void)?
     /// How questions about unsaved edits are asked (tests answer them without a dialog).
     var prompts = Prompts.alerts
+    /// Revealing in Finder and moving to the Trash (tests record them instead).
+    var fileActions = FileActions.system
+    /// A preview opened from the tree leaves the keyboard in the tree instead of moving it to the editor.
+    private var keepsSidebarFocus = false
     /// Live windows ask the remotes where their branches are; snapshots, benchmarks and soaks never do.
     private var checksRemotes = false
 
@@ -303,7 +307,10 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     private func connectViews() {
         root.sidebarTabs.onSelect = { [weak self] tab in self?.selectSidebarTab(tab) }
         root.tree.onToggle = { [weak self] row in self?.workspace.toggle(row) }
-        root.tree.onOpen = { [weak self] row, pin in self?.workspace.open(row, pin: pin) }
+        root.tree.onOpen = { [weak self] row, pin in self?.openFromTree(row, pin: pin) }
+        root.tree.onSelect = { [weak self] row in self?.workspace.select(row) }
+        root.tree.onDelete = { [weak self] in self?.trashSelectedRow() ?? false }
+        root.tree.menuForRow = { [weak self] row in self?.menu(for: row) }
         root.tabBar.onSelect = { [weak self] index in self?.workspace.selectTab(index) }
         root.tabBar.onPin = { [weak self] index in self?.workspace.pinTab(index) }
         root.tabBar.onClose = { [weak self] index in self?.requestCloseTab(index) }
@@ -379,6 +386,16 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         window.makeFirstResponder(root.sidebarHidden ? root.mainResponder : root.tree)
     }
 
+    /// A file row was clicked or reached with the arrow keys (a preview: the keyboard stays in the tree), or kept
+    /// with a double click or Return (the keyboard moves to the main area).
+    private func openFromTree(_ row: TreeRow, pin: Bool) {
+        keepsSidebarFocus = !pin
+        defer { keepsSidebarFocus = false }
+        workspace.open(row, pin: pin)
+        // Not `root.mainResponder`: coming from an edit tab the editor still shows until the new file has loaded.
+        if pin { window.makeFirstResponder(workspace.activeBuffer == nil ? root.codeView : root.mainResponder) }
+    }
+
     // MARK: - Workspace -> views
 
     private func refreshSidebar() {
@@ -449,7 +466,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         if !shown {
             root.layoutSubtreeIfNeeded()
             if isNew { editor.restoreState() }
-            window.makeFirstResponder(editor.textView)
+            if !keepsSidebarFocus { window.makeFirstResponder(editor.textView) }
         }
     }
 
@@ -555,6 +572,92 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     /// Minimized, hidden or covered windows are not visible: the remote timer rests.
     func windowDidChangeOcclusionState(_ notification: Notification) {
         workspace.remote.setVisible(window.occlusionState.contains(.visible))
+    }
+
+    // MARK: - Row menu
+
+    /// What a menu item acts on: the path is fixed when the menu opens.
+    private struct RowChoice {
+        var action: RowAction
+        var path: String
+    }
+
+    func menu(for row: TreeRow) -> NSMenu? {
+        let entries = workspace.menuEntries(for: row)
+        guard let path = workspace.absolutePath(of: row), !entries.isEmpty else { return nil }
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        for entry in entries {
+            switch entry {
+            case let .item(action, isEnabled):
+                let item = NSMenuItem(title: action.title, action: #selector(chooseRowItem(_:)), keyEquivalent: action.keyEquivalent)
+                item.keyEquivalentModifierMask = .command
+                item.target = self
+                item.isEnabled = isEnabled
+                item.representedObject = RowChoice(action: action, path: path)
+                menu.addItem(item)
+            case .separator:
+                menu.addItem(.separator())
+            }
+        }
+        return menu
+    }
+
+    @objc private func chooseRowItem(_ sender: NSMenuItem) {
+        guard let choice = sender.representedObject as? RowChoice else { return }
+        perform(choice.action, on: choice.path)
+    }
+
+    func perform(_ action: RowAction, on path: String) {
+        switch action {
+        case .newFile: newFile(near: path)
+        case .showInFinder: fileActions.reveal(path)
+        case .moveToTrash: moveToTrash(path)
+        }
+    }
+
+    /// Asks for a name and makes the file in `path` if that is a folder, otherwise next to it.
+    func newFile(near path: String) {
+        let type = (try? FileManager.default.attributesOfItem(atPath: path))?[.type] as? FileAttributeType
+        let folder = type == .typeDirectory ? path : (path as NSString).deletingLastPathComponent
+        let shown = folder.hasPrefix(workspace.rootPath + "/") ? String(folder.dropFirst(workspace.rootPath.count + 1)) : workspace.rootName
+        prompts.askName("New file in “\(shown)”", window) { [weak self] name in
+            guard let name, let self else { return }
+            do throws(NewFileError) {
+                try workspace.createFile(named: name, in: folder)
+            } catch {
+                prompts.tell(error.message, window)
+                return
+            }
+            if let selected = workspace.selectedRowID { root.tree.scrollRowToVisible(id: selected) }
+        }
+    }
+
+    /// Backspace on the selected row: the same as "Move to Trash" in its menu. False when the menu would not offer
+    /// that, so the key does what it did before.
+    private func trashSelectedRow() -> Bool {
+        guard let id = workspace.selectedRowID, let row = workspace.sidebarRows().first(where: { $0.id == id }),
+              let path = workspace.absolutePath(of: row),
+              workspace.menuEntries(for: row).contains(.item(.moveToTrash, isEnabled: true)) else { return false }
+        moveToTrash(path)
+        return true
+    }
+
+    /// Asks, moves the item to the Trash and refreshes the sidebar at once. Refuses anything outside the opened folder.
+    func moveToTrash(_ path: String) {
+        guard workspace.isInsideRoot(path) else { return }
+        let type = (try? FileManager.default.attributesOfItem(atPath: path))?[.type] as? FileAttributeType
+        let question = TrashQuestion(name: (path as NSString).lastPathComponent, isFolder: type == .typeDirectory)
+        prompts.confirmTrash(question, window) { [weak self] confirmed in
+            guard confirmed, let self else { return }
+            do {
+                try fileActions.trash(path)
+            } catch {
+                prompts.tell(error.localizedDescription, window)
+                return
+            }
+            workspace.refresh()
+        }
     }
 
     // MARK: - Menu actions

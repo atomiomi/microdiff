@@ -87,8 +87,16 @@ final class TreeView: CanvasScrollView {
 
     /// Called when a repo or folder row is clicked.
     var onToggle: ((TreeRow) -> Void)?
+    /// Called when the arrow keys land on a repository or folder row: it is selected, nothing else happens.
+    var onSelect: ((TreeRow) -> Void)?
     /// Called when a file row is activated. `pin` is true for a double click or Return.
     var onOpen: ((TreeRow, _ pin: Bool) -> Void)?
+
+    /// The context menu of a row (a right click or control-click on it); nil for none.
+    var menuForRow: ((TreeRow) -> NSMenu?)?
+
+    /// Called for Backspace or forward Delete, alone or with Command. Returns whether it dealt with the key.
+    var onDelete: (() -> Bool)?
 
     /// Shown in the empty space below the rows ("no changes").
     var emptyMessage: String? {
@@ -290,7 +298,7 @@ final class TreeView: CanvasScrollView {
         let row = rows[index]
         let y = tops[index]
         let h = height(of: row)
-        let isSelected = row.kind == .file && row.id == selectedID
+        let isSelected = row.id == selectedID
         let isHover = !isSelected && hoverIndex == index
         // Fills always cover what is on screen. Repository rows do not scroll: everything on them is
         // laid out from the visible left edge.
@@ -520,6 +528,10 @@ final class TreeView: CanvasScrollView {
 
     // MARK: - Mouse and keyboard
 
+    override func menu(at point: CGPoint) -> NSMenu? {
+        rowIndex(atY: point.y).flatMap { menuForRow?(rows[$0]) }
+    }
+
     override func mouse(_ phase: MousePhase, at point: CGPoint, event: NSEvent) {
         switch phase {
         case .moved:
@@ -541,12 +553,10 @@ final class TreeView: CanvasScrollView {
     }
 
     private func activate(_ row: TreeRow, pin: Bool) {
+        selectedID = row.id
         switch row.kind {
-        case .repo, .directory:
-            onToggle?(row)
-        case .file:
-            selectedID = row.id
-            onOpen?(row, pin)
+        case .repo, .directory: onToggle?(row)
+        case .file: onOpen?(row, pin)
         }
     }
 
@@ -555,24 +565,47 @@ final class TreeView: CanvasScrollView {
         switch event.keyCode {
         case 125: moveSelection(from: current, step: 1) // down
         case 126: moveSelection(from: current, step: -1) // up
+        case 123: // left: close an open folder, otherwise go to the parent row
+            guard let current else { return }
+            if rows[current].kind != .file, rows[current].isExpanded {
+                onToggle?(rows[current])
+            } else if let parent = parentIndex(of: current) {
+                land(on: parent)
+            }
+        case 124: // right: open a closed folder, otherwise go to the first child
+            guard let current, rows[current].kind != .file else { return }
+            if !rows[current].isExpanded {
+                onToggle?(rows[current])
+            } else if current + 1 < rows.count, rows[current + 1].depth > rows[current].depth {
+                land(on: current + 1)
+            }
         case 36, 76: // return, enter
-            if let current { onOpen?(rows[current], true) }
+            guard let current else { return }
+            activate(rows[current], pin: true)
+        case 51, 117: // backspace, forward delete
+            let modifiers = event.modifierFlags.intersection([.shift, .control, .option, .command])
+            if modifiers.isSubset(of: .command), onDelete?() == true { return }
+            super.keyDown(with: event)
         default:
             super.keyDown(with: event)
         }
     }
 
-    /// Moves to the next file row in a direction, opening it as a preview.
     private func moveSelection(from current: Int?, step: Int) {
-        var index = current.map { $0 + step } ?? (step > 0 ? 0 : rows.count - 1)
-        while rows.indices.contains(index) {
-            if rows[index].kind == .file {
-                selectedID = rows[index].id
-                scrollRowToVisible(id: rows[index].id)
-                onOpen?(rows[index], false)
-                return
-            }
-            index += step
-        }
+        let index = current.map { $0 + step } ?? (step > 0 ? 0 : rows.count - 1)
+        if rows.indices.contains(index) { land(on: index) }
+    }
+
+    /// The nearest row above that is less deep; nil at the top level.
+    private func parentIndex(of index: Int) -> Int? {
+        rows[..<index].lastIndex { $0.depth < rows[index].depth }
+    }
+
+    /// Selects a row reached with the keys. A file also opens as a preview; the keyboard stays here.
+    private func land(on index: Int) {
+        let row = rows[index]
+        selectedID = row.id
+        scrollRowToVisible(id: row.id)
+        if row.kind == .file { onOpen?(row, false) } else { onSelect?(row) }
     }
 }
